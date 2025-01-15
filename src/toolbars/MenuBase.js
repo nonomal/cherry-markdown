@@ -17,12 +17,19 @@
 import Logger from '@/Logger';
 import { escapeHTMLSpecialCharOnce as $e } from '@/utils/sanitize';
 import { createElement } from '@/utils/dom';
+import NestedError from '@/utils/error';
 
 /**
  * @typedef {Object} SubMenuConfigItem
  * @property {string} name - 子菜单项名称
  * @property {string=} iconName - 子菜单项图标名称
- * @property {function} onclick - 子菜单项点击事件
+ * @property {function(MouseEvent): any} onclick - 子菜单项点击事件
+ * @property {string=} icon - 子菜单项图标(url)
+ * @property {boolean=} [disabledHideAllSubMenu=false] - 是否禁用后续调用hideAllSubMenu
+ */
+
+/**
+ * @typedef {Record<string, import('~types/cherry').ShortcutKeyMapStruct>} HookShortcutKeyMap
  */
 
 /**
@@ -54,6 +61,10 @@ function getPosition(targetDom, positionModel = 'absolute') {
  */
 
 /**
+ * @typedef {Partial<import('@/Cherry').default> & {$currentMenuOptions?:import('~types/menus').CustomMenuConfig}} MenuBaseConstructorParams
+ */
+
+/**
  * @class MenuBase
  */
 export default class MenuBase {
@@ -64,14 +75,20 @@ export default class MenuBase {
   _onClick;
 
   /**
-   *
-   * @param {*} $cherry
+   * @param {MenuBaseConstructorParams} $cherry
    */
   constructor($cherry) {
     this.$cherry = $cherry;
     this.bubbleMenu = false;
     this.subMenu = null; // 子菜单实例
-    this.name = ''; // 菜单项Name
+    this.$currentMenuOptions = $cherry.$currentMenuOptions;
+    // HookCenter 中会默认使currentMenuOptions的name属性与iconName属性一致
+    this.name = $cherry.$currentMenuOptions?.name ?? ''; // 菜单项Name
+    if (typeof $cherry.$currentMenuOptions?.icon === 'string') {
+      this.iconName = $cherry.$currentMenuOptions.icon;
+    }
+    /** @type {import('~types/menus').MenuIconType} */
+    this.iconType = null;
     this.editor = $cherry.editor; // markdown实例
     this.locale = $cherry.locale;
     this.dom = null;
@@ -92,6 +109,11 @@ export default class MenuBase {
       // eslint-disable-next-line no-underscore-dangle
       this.fire = this._onClick;
     }
+    /**
+     * 快捷键map映射
+     * @type {HookShortcutKeyMap}
+     */
+    this.shortcutKeyMap = {};
   }
 
   getSubMenuConfig() {
@@ -106,6 +128,7 @@ export default class MenuBase {
   setName(name, iconName) {
     this.name = name;
     this.iconName = iconName;
+    this.$currentMenuOptions = { name, icon: iconName };
   }
 
   /**
@@ -138,6 +161,56 @@ export default class MenuBase {
   }
 
   /**
+   * 创建一个IconFont类型的图标
+   * @param {string} iconName
+   * @param {object} options
+   */
+  createIconFontIcon(iconName, options = {}) {
+    const icon = createElement('i', `ch-icon ch-icon-${iconName}`);
+    if (typeof options?.className === 'string') {
+      icon.classList.add(options.className);
+    }
+    return icon;
+  }
+
+  /**
+   * 创建一个SVG类型的图标
+   * @param {import('~types/menus').CustomMenuIcon} options
+   */
+  createSvgIcon(options) {
+    if (options.type !== 'svg') {
+      throw new Error('except options.type is "svg", but get "${options.type}"');
+    }
+    try {
+      const domParser = new DOMParser();
+      const svg = domParser.parseFromString(options.content, 'image/svg+xml')?.lastElementChild;
+      if (options.iconStyle) {
+        svg.setAttribute('style', options.iconStyle);
+      }
+      if (options.iconClassName) {
+        svg.setAttribute('class', options.iconClassName);
+      }
+      return svg;
+    } catch (error) {
+      throw new NestedError(error);
+    }
+  }
+
+  /**
+   * 创建一个Image类型的图标
+   * @param {import('~types/menus').CustomMenuIcon} options
+   */
+  createImageIcon(options) {
+    if (options.type !== 'image') {
+      throw new Error('except options.type is "image", but get "${options.type}"');
+    }
+    return createElement('img', `ch-icon${options.iconClassName ? ` ${options.iconClassName}` : ''}`, {
+      src: options.content,
+      style: options.iconStyle,
+    });
+  }
+
+  /**
    * 创建一个一级菜单
    * @param {boolean} asSubMenu 是否以子菜单的形式创建
    */
@@ -148,10 +221,38 @@ export default class MenuBase {
     const span = createElement('span', classNames, {
       title: this.locale[this.name] || $e(this.name),
     });
-    // 如果有图标，则添加图标
-    if (this.iconName && !this.noIcon) {
-      const icon = createElement('i', `ch-icon ch-icon-${this.iconName}`);
-      span.appendChild(icon);
+    if (!this.noIcon) {
+      /** @type{Element} */
+      let icon = null;
+      const customIcon = this.$currentMenuOptions.icon;
+      if (typeof customIcon === 'string') {
+        // 默认 this.name 和 iconName 是一致的，除非手动调用 setName 方法来更改
+        // 这里的逻辑就是 MenuBase 子类没有手动调用setName时则以传入的（默认跟hook name一致，可以在配置文件中更改）为准
+        // 否则以子类set的为准
+        icon = this.createIconFontIcon(this.iconName !== this.name ? this.iconName : customIcon);
+        this.iconType = 'iconfont';
+      } else if (customIcon instanceof HTMLElement) {
+        icon = customIcon;
+        this.iconType = 'element';
+      } else if (typeof customIcon === 'object') {
+        const { type } = customIcon;
+        if (type === 'svg') {
+          icon = this.createSvgIcon(customIcon);
+          this.iconType = 'svg';
+        } else if (type === 'image') {
+          icon = this.createImageIcon(customIcon);
+          this.iconType = 'image';
+        } else if (type === 'iconfont') {
+          icon = this.createIconFontIcon(customIcon.content);
+          this.iconType = 'iconfont';
+        } else {
+          throw new Error(`except customIcon.type is "svg", "image", "iconfont", but get "${type}"`);
+        }
+      }
+      if (icon !== null) {
+        icon.classList.add(`cherry-menu-${this.name}`);
+        span.appendChild(icon);
+      }
     }
     // 二级菜单强制显示文字，没有图标的按钮也显示文字
     if (asSubMenu || this.noIcon) {
@@ -164,14 +265,24 @@ export default class MenuBase {
     return span;
   }
 
+  /**
+   * 通过配置创建一个二级菜单
+   * @param {SubMenuConfigItem} config 配置
+   */
   createSubBtnByConfig(config) {
-    const { name, iconName, onclick } = config;
+    const { name, iconName, icon, onclick } = config;
     const span = createElement('span', 'cherry-dropdown-item', {
       title: this.locale[name] || $e(name),
     });
     if (iconName) {
-      const icon = createElement('i', `ch-icon ch-icon-${iconName}`);
-      span.appendChild(icon);
+      const iconElement = createElement('i', `ch-icon ch-icon-${iconName}`);
+      span.appendChild(iconElement);
+    } else if (icon) {
+      const iconElement = createElement('img', 'ch-icon', {
+        src: icon,
+        style: 'width: 16px; height: 16px; vertical-align: sub;',
+      });
+      span.appendChild(iconElement);
     }
     span.innerHTML += this.locale[name] || $e(name);
     span.addEventListener('click', onclick, false);
@@ -329,8 +440,72 @@ export default class MenuBase {
     return selection;
   }
 
+  /**
+   * 兼容之前的写法，但不支持配置
+   */
   get shortcutKeys() {
     return [];
+  }
+
+  /**
+   * 更新菜单图标
+   * @param {import('~types/menus').CustomMenuConfig['icon']} options 图标配置
+   */
+  updateMenuIcon(options) {
+    if (this.noIcon) {
+      return false;
+    }
+    // 传入 options 是个字符串，说明是想要更新 iconfont，那就要求当前的icon类型也为iconfont
+    if (typeof options === 'string') {
+      if (this.iconType === 'iconfont') {
+        this.dom.querySelector('i')?.classList.replace(`ch-icon-${this.iconName}`, `ch-icon-${options}`);
+        this.iconName = options;
+        this.$currentMenuOptions.icon = options;
+        this.iconType = 'iconfont';
+        return true;
+      }
+      return false;
+    }
+    if (options instanceof HTMLElement) {
+      options.classList.add(`ch-icon cherry-menu-${this.name}`);
+      this.dom.replaceChildren(options);
+      this.iconType = 'element';
+      return true;
+    }
+    let { iconName } = this;
+    switch (options.type) {
+      case 'iconfont':
+        if (this.iconType === 'iconfont') {
+          iconName = options.content;
+          this.dom.querySelector('i')?.classList.replace(`ch-icon-${this.iconName}`, `ch-icon-${iconName}`);
+          this.iconName = iconName;
+        } else {
+          const icon = this.createIconFontIcon(options.content, {
+            className: `cherry-menu-${this.name}`,
+          });
+          if (options.iconClassName) {
+            icon.classList.add(options.iconClassName);
+          }
+          if (options.iconStyle) {
+            icon.setAttribute('style', options.iconStyle);
+          }
+          this.dom.replaceChildren(icon);
+        }
+        this.iconType = 'iconfont';
+        break;
+      case 'svg':
+        this.dom.replaceChildren(this.createSvgIcon(options));
+        this.iconType = 'svg';
+        break;
+      case 'image':
+        this.dom.replaceChildren(this.createImageIcon(options));
+        this.iconType = 'image';
+        break;
+      case 'element':
+        throw Error(`except the options argument instance of HTMLElement, but get a type of ${typeof options}`);
+      default:
+        break;
+    }
   }
 
   /**
@@ -349,6 +524,14 @@ export default class MenuBase {
     return getPosition(this.dom, this.positionModel);
   }
 
+  hide() {
+    this.dom.style.display = 'none';
+  }
+
+  show() {
+    this.dom.style.display = 'block';
+  }
+
   /**
    * 根据按钮获取按钮的父元素，这里父元素要绕过toolbar-(left|right)那一层
    * @param {HTMLElement} dom 按钮元素
@@ -360,5 +543,14 @@ export default class MenuBase {
       parent = parent.parentElement;
     }
     return parent;
+  }
+
+  /**
+   * 绑定子菜单点击事件
+   * @param {HTMLDivElement} subMenuDomPanel
+   * @returns {number} 当前激活的子菜单索引
+   */
+  getActiveSubMenuIndex(subMenuDomPanel) {
+    return -1;
   }
 }

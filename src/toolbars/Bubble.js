@@ -49,6 +49,13 @@ export default class Bubble extends Toolbar {
     this.editorDom = this.options.editor.getEditorDom();
     this.initBubbleDom();
     this.editorDom.querySelector('.CodeMirror').appendChild(this.bubbleDom);
+    Object.entries(this.shortcutKeyMap).forEach(([key, value]) => {
+      this.$cherry.toolbar.shortcutKeyMap[key] = value;
+    });
+  }
+
+  appendMenusToDom(menus) {
+    this.options.dom.appendChild(menus);
   }
 
   /**
@@ -167,6 +174,16 @@ export default class Bubble extends Toolbar {
       this.updatePositionWhenScroll();
     });
     this.options.editor.addListener('beforeSelectionChange', (codemirror, info) => {
+      setTimeout(() => {
+        const selections = codemirror.getSelections();
+        const selectionStr = selections.join('');
+        if (selectionStr !== this.lastSelectionsStr && (selectionStr || this.lastSelectionsStr)) {
+          this.lastSelections = !this.lastSelections ? [] : this.lastSelections;
+          this.$cherry.$event.emit('selectionChange', { selections, lastSelections: this.lastSelections, info });
+          this.lastSelections = selections;
+          this.lastSelectionsStr = selectionStr;
+        }
+      }, 10);
       // 当编辑区选中内容改变时，需要展示/隐藏bubble工具栏，并计算工具栏位置
       if (info.origin !== '*mouse' && (info.origin !== null || typeof info.origin === 'undefined')) {
         return true;

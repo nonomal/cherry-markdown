@@ -13,15 +13,63 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { mac } from 'codemirror/src/util/browser';
 import HookCenter from './HookCenter';
-import Event from '@/Event';
 import { createElement } from '@/utils/dom';
 import Logger from '@/Logger';
+import {
+  getAllowedShortcutKey,
+  getStorageKeyMap,
+  keyStack2UniqueString,
+  storageKeyMap,
+  isEnableShortcutKey,
+} from '@/utils/shortcutKey';
+
+/**
+ * @typedef {()=>void} Bold 向cherry编辑器中插入粗体语法
+ * @typedef {()=>void} Italic 向cherry编辑器中插入斜体语法
+ * @typedef {(level:1|2|3|4|5|'1'|'2'|'3'|'4'|'5')=>void} Header  向cherry编辑器中插入标题语法
+ * - level 标题等级 1~5
+ * @typedef {()=>void} Strikethrough 向cherry编辑器中插入删除线语法
+ * @typedef {(type:'ol'|'ul'|'checklist'|1|2|3|'1'|'2'|'3')=>void} List 向cherry编辑器中插入有序、无序列表或者checklist语法
+ * - ol(1)有序
+ * - ul(2)无序列表
+ * - checklist(3)checklist
+ * @typedef {`normal-table-${number}*${number}`} normalTableRowCol 插入表格语法约束
+ * @typedef {(insert:'hr'|'br'|'code'|'formula'|'checklist'|'toc'|'link'|'image'|'video'|'audio'|'normal-table'|normalTableRowCol)=>void} Insert 向cherry编辑器中插入特定语法(需要在`toolbar`中预先配置功能)
+ * - hr 水平分割线
+ * - br 换行
+ * - code 代码块
+ * - formula 公式
+ * - checklist 检查项
+ * - toc 目录
+ * - link 链接
+ * - image 图片
+ * - video 视频
+ * - audio 音频
+ * - normal-table 插入3行5列的表格
+ * - normal-table-row*col 如normal-table-2*4插入2行(包含表头是3行)4列的表格
+ * @typedef {(type:'1'|'2'|'3'|'4'|'5'|'6'|1|2|3|4|5|6|'flow'|'sequence'|'state'|'class'|'pie'|'gantt')=>void} Graph 向cherry编辑器中插入画图语法
+ * - flow(1) 流程图
+ * - sequence(2) 时序图
+ * - state(3)状态图
+ * - class(4)类图
+ * - pie(5)饼图
+ * - gantt(6)甘特图
+ */
 
 export default class Toolbar {
   /**
-   * @type {Record<string, any>} 外部获取 toolbarHandler
+   * @typedef {{
+   * bold?:Bold;
+   * italic?:Italic;
+   * header?:Header;
+   * strikethrough?:Strikethrough;
+   * list?:List;
+   * insert?:Insert;
+   * graph?:Graph;
+   * [key:string]:any;
+   * }} ToolbarHandlers
+   * @type ToolbarHandlers 外部获取 toolbarHandlers 的部分功能
    */
   toolbarHandlers = {};
 
@@ -37,7 +85,6 @@ export default class Toolbar {
       dom: document.createElement('div'),
       buttonConfig: ['bold'],
       customMenu: [],
-      buttonRightConfig: [],
     };
 
     Object.assign(this.options, options);
@@ -45,23 +92,25 @@ export default class Toolbar {
     this.instanceId = this.$cherry.instanceId;
     this.menus = new HookCenter(this);
     this.drawMenus();
+    this.collectShortcutKey();
+    this.collectToolbarHandler();
     this.init();
   }
 
   init() {
-    this.collectShortcutKey();
-    this.collectToolbarHandler();
-    Event.on(this.instanceId, Event.Events.cleanAllSubMenus, () => this.hideAllSubMenu());
+    this.$cherry.$event.on('cleanAllSubMenus', () => this.hideAllSubMenu());
   }
 
   previewOnly() {
     this.options.dom.classList.add('preview-only');
-    Event.emit(this.instanceId, Event.Events.toolbarHide);
+    this.$cherry.wrapperDom.classList.add('cherry--no-toolbar');
+    this.$cherry.$event.emit('toolbarHide');
   }
 
   showToolbar() {
     this.options.dom.classList.remove('preview-only');
-    Event.emit(this.instanceId, Event.Events.toolbarShow);
+    this.$cherry.wrapperDom.classList.remove('cherry--no-toolbar');
+    this.$cherry.$event.emit('toolbarShow');
   }
 
   isHasLevel2Menu(name) {
@@ -88,59 +137,49 @@ export default class Toolbar {
    */
   drawMenus() {
     const fragLeft = document.createDocumentFragment();
-    const toolbarLeft = createElement('div', 'toolbar-left');
 
     this.menus.level1MenusName.forEach((name) => {
       const btn = this.menus.hooks[name].createBtn();
-      btn.addEventListener(
-        'click',
-        (event) => {
-          this.onClick(event, name);
-        },
-        false,
-      );
+      if (typeof window === 'object' && 'onpointerup' in window) {
+        // 只有先down再up的才触发click逻辑，避免误触（尤其是float menu的场景）
+        btn.addEventListener(
+          'pointerdown',
+          () => {
+            this.isPointerDown = true;
+          },
+          false,
+        );
+        btn.addEventListener(
+          'pointerup',
+          (event) => {
+            this.isPointerDown && this.onClick(event, name);
+            this.isPointerDown = false;
+          },
+          false,
+        );
+      } else {
+        // vscode 插件里不支持 pointer event
+        btn.addEventListener(
+          'click',
+          (event) => {
+            this.onClick(event, name);
+          },
+          false,
+        );
+      }
       if (this.isHasSubMenu(name)) {
         btn.classList.add('cherry-toolbar-dropdown');
       }
       fragLeft.appendChild(btn);
     });
 
-    toolbarLeft.appendChild(fragLeft);
-    this.options.dom.appendChild(toolbarLeft);
-
-    this.options.buttonRightConfig?.length ? this.drawRightMenus(this.options.buttonRightConfig) : null;
+    this.appendMenusToDom(fragLeft);
   }
-  /**
-   * 根据配置画出来右侧一级工具栏
-   */
-  drawRightMenus(buttonRightConfig) {
-    const toolbarRight = createElement('div', 'toolbar-right');
-    const fragRight = document.createDocumentFragment();
-    const rightOptions = {
-      options: {
-        $cherry: this.$cherry,
-        buttonConfig: buttonRightConfig,
-        customMenu: [],
-      },
-    };
 
-    const rightMenus = new HookCenter(rightOptions);
-
-    rightMenus.level1MenusName.forEach((name) => {
-      const btn = rightMenus.hooks[name].createBtn();
-      btn.addEventListener(
-        'click',
-        (event) => {
-          console.log('第一次点击');
-          rightMenus.hooks[name].fire(event, name);
-        },
-        false,
-      );
-      fragRight.appendChild(btn);
-    });
-
-    toolbarRight.appendChild(fragRight);
-    this.options.dom.appendChild(toolbarRight);
+  appendMenusToDom(menus) {
+    const toolbarLeft = createElement('div', 'toolbar-left');
+    toolbarLeft.appendChild(menus);
+    this.options.dom.appendChild(toolbarLeft);
   }
 
   setSubMenuPosition(menuObj, subMenuObj) {
@@ -172,7 +211,9 @@ export default class Toolbar {
     if (subMenuConfig.length > 0) {
       subMenuConfig.forEach((config) => {
         const btn = this.menus.hooks[name].createSubBtnByConfig(config);
-        btn.addEventListener('click', () => this.hideAllSubMenu(), false);
+        if (!config?.disabledHideAllSubMenu) {
+          btn.addEventListener('click', () => this.hideAllSubMenu(), false);
+        }
         this.subMenus[name].appendChild(btn);
       });
     }
@@ -190,9 +231,31 @@ export default class Toolbar {
     if (this.isHasSubMenu(name) && !focusEvent) {
       this.toggleSubMenu(name);
     } else {
-      this.hideAllSubMenu();
+      /**
+       * 如果定义了hideOtherSubMenu，则隐藏其他二级菜单，但不隐藏自己（因为其二级菜单是自己实现的独立逻辑）
+       *  比如：颜色选择器、快捷键配置
+       */
+      // @ts-ignore
+      if (typeof menu.hideOtherSubMenu === 'function') {
+        // @ts-ignore
+        menu.hideOtherSubMenu(() => this.hideAllSubMenu());
+      } else {
+        this.hideAllSubMenu();
+      }
       menu.fire(event, name);
     }
+  }
+
+  /**
+   * 激活二级菜单添加选中颜色
+   * @param {string} name
+   */
+  activeSubMenuItem(name) {
+    const subMenu = this.subMenus[name];
+    const index = this.menus.hooks?.[name]?.getActiveSubMenuIndex(subMenu);
+    subMenu?.querySelectorAll('.cherry-dropdown-item').forEach((item, i) => {
+      item.classList.toggle('cherry-dropdown-item__selected', i === index);
+    });
   }
 
   /**
@@ -204,6 +267,7 @@ export default class Toolbar {
       this.hideAllSubMenu();
       this.drawSubMenus(name);
       this.subMenus[name].style.display = 'block';
+      this.activeSubMenuItem(name);
       return;
     }
     if (this.subMenus[name].style.display === 'none') {
@@ -211,6 +275,7 @@ export default class Toolbar {
       this.hideAllSubMenu();
       this.subMenus[name].style.display = 'block';
       this.setSubMenuPosition(this.menus.hooks[name], this.subMenus[name]);
+      this.activeSubMenuItem(name);
     } else {
       // 如果是显示的，则隐藏当前二级菜单
       this.subMenus[name].style.display = 'none';
@@ -227,14 +292,101 @@ export default class Toolbar {
   }
 
   /**
-   * 收集快捷键
+   * 收集工具栏的各项信息，主要有：
+   *   this.toolbarHandlers
+   *   this.menus.hooks
+   *   this.shortcutKeyMap
+   * @param {Toolbar} toolbarObj 工具栏对象
    */
-  collectShortcutKey() {
-    this.menus.allMenusName.forEach((name) => {
-      this.menus.hooks[name].shortcutKeys?.forEach((key) => {
-        this.shortcutKeyMap[key] = name;
+  collectMenuInfo(toolbarObj) {
+    this.toolbarHandlers = Object.assign({}, this.toolbarHandlers, toolbarObj.toolbarHandlers);
+    this.menus.hooks = Object.assign({}, toolbarObj.menus.hooks, this.menus.hooks);
+    // 只有没设置自定义快捷键的时候才需要收集其他toolbar对象的快捷键配置
+    if (!this.options.shortcutKey || Object.keys(this.options.shortcutKey).length <= 0) {
+      this.shortcutKeyMap = Object.assign({}, this.shortcutKeyMap, toolbarObj.shortcutKeyMap);
+    }
+  }
+
+  /**
+   * 收集快捷键
+   * @param {boolean} useUserSettings 是否使用用户配置的快捷键
+   */
+  collectShortcutKey(useUserSettings = true) {
+    // 兼容旧版本配置
+    if (
+      this.$cherry.options.toolbars.shortcutKey &&
+      Object.keys(this.$cherry.options.toolbars.shortcutKey).length > 0
+    ) {
+      Object.entries(this.$cherry.options.toolbars.shortcutKey).forEach(([key, value]) => {
+        const $key = key
+          .replace(/Ctrl-/g, 'Control-')
+          .replace(/-([A-Za-z])$/g, (w, m1) => {
+            return `-Key${m1.toUpperCase()}`;
+          })
+          .replace(/-([0-9])$/g, '-Digit$1');
+        this.shortcutKeyMap[$key] = { hookName: value, aliasName: this.$cherry.locale[value] || value };
       });
-    });
+    }
+    if (this.$cherry.options.toolbars.shortcutKeySettings.isReplace) {
+      this.shortcutKeyMap = this.$cherry.options.toolbars.shortcutKeySettings.shortcutKeyMap;
+    } else {
+      this.menus.allMenusName.forEach((name) => {
+        this.menus.hooks[name].shortcutKeys?.forEach((key) => {
+          this.shortcutKeyMap[key] = name;
+        });
+        if (typeof this.menus.hooks[name].shortcutKeyMap === 'object' && this.menus.hooks[name].shortcutKeyMap) {
+          Object.entries(this.menus.hooks[name].shortcutKeyMap).forEach(([key, value]) => {
+            if (key in this.shortcutKeyMap) {
+              console.error(`The shortcut key ${key} is already registered`);
+              return;
+            }
+            this.shortcutKeyMap[key] = value;
+          });
+        }
+      });
+      Object.entries(this.$cherry.options.toolbars.shortcutKeySettings.shortcutKeyMap).forEach(([key, value]) => {
+        this.shortcutKeyMap[key] = value;
+      });
+      if (!useUserSettings) {
+        return;
+      }
+      // 本地缓存的快捷键配置优先级最高，按 hookName-aliasName 替换相同的快捷键
+      const cachedMap = getStorageKeyMap(this.$cherry.nameSpace);
+      if (cachedMap) {
+        const nameKeyMap = {};
+        Object.entries(this.shortcutKeyMap).forEach(([key, value]) => {
+          nameKeyMap[`${value.hookName}-${value.aliasName}`] = key;
+        });
+        Object.entries(cachedMap).forEach(([key, value]) => {
+          const testKey = `${value.hookName}-${value.aliasName}`;
+          if (nameKeyMap[testKey]) {
+            delete this.shortcutKeyMap[nameKeyMap[testKey]];
+          }
+          this.shortcutKeyMap[key] = value;
+        });
+      }
+    }
+  }
+
+  /**
+   * 更新快捷键映射
+   * @param {string} oldShortcutKey 旧的快捷键
+   * @param {string} newShortcutKey 新的快捷键
+   */
+  updateShortcutKeyMap(oldShortcutKey, newShortcutKey) {
+    if (oldShortcutKey === newShortcutKey) {
+      return false;
+    }
+    const old = this.shortcutKeyMap[oldShortcutKey];
+    if (!old) {
+      return false;
+    }
+    // 删除旧值
+    delete this.shortcutKeyMap[oldShortcutKey];
+    // 更新内存中的映射
+    this.shortcutKeyMap[newShortcutKey] = old;
+    // 更新缓存中的映射
+    storageKeyMap(this.$cherry.nameSpace, this.shortcutKeyMap);
   }
 
   collectToolbarHandler() {
@@ -261,47 +413,27 @@ export default class Toolbar {
    * @returns {boolean} 是否有对应的快捷键
    */
   matchShortcutKey(evt) {
-    return !!this.shortcutKeyMap[this.getCurrentKey(evt)];
+    const onKeyStack = getAllowedShortcutKey(evt);
+    const shortcutKey = keyStack2UniqueString(onKeyStack);
+    return !!this.shortcutKeyMap?.[shortcutKey];
   }
 
   /**
    * 触发对应快捷键的事件
    * @param {KeyboardEvent} evt
+   * @returns {boolean} 是否需要阻塞后续事件，true: 阻塞；false: 不阻塞
    */
   fireShortcutKey(evt) {
-    const currentKey = this.getCurrentKey(evt);
-    this.menus.hooks[this.shortcutKeyMap[currentKey]]?.fire(evt, currentKey);
-  }
-
-  /**
-   * 格式化当前按键，mac下的command按键转换为ctrl
-   * @param {KeyboardEvent} event
-   * @returns
-   */
-  getCurrentKey(event) {
-    let key = '';
-    if (event.ctrlKey) {
-      key += 'Ctrl-';
+    // 如果禁用了快捷键，则不再触发快捷键事件
+    if (!isEnableShortcutKey(this.$cherry.nameSpace)) {
+      return false;
     }
-
-    if (event.altKey) {
-      key += 'Alt-';
+    const onKeyStack = getAllowedShortcutKey(evt);
+    const currentKey = keyStack2UniqueString(onKeyStack);
+    const keyMap = this.shortcutKeyMap[currentKey]?.hookName;
+    if (typeof keyMap === 'string' && keyMap) {
+      this.menus.hooks[keyMap]?.fire(evt, currentKey);
     }
-
-    if (event.metaKey && mac) {
-      key += 'Ctrl-';
-    }
-
-    // 如果存在shift键
-    if (event.shiftKey) {
-      key += `Shift-`;
-    }
-
-    // 如果还有第三个键 且不是 shift键
-    if (event.key && event.key.toLowerCase() !== 'shift') {
-      key += event.key.toLowerCase();
-    }
-
-    return key;
+    return true;
   }
 }

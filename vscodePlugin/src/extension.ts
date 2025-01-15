@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getWebviewContent } from './webview';
+import { uploadFileHandler } from './handler/uploadFile';
 
 let cherryPanel: vscode.WebviewPanel; // 保存预览窗口的webview实例
 let isCherryPanelInit: boolean = false;
@@ -8,27 +9,33 @@ let extensionPath: string = '';
 let targetDocument: vscode.TextEditor;
 let disableScrollTrigger: boolean = false; // true：滚动时不往webview发送滚动事件，反之发送
 let disableEditTrigger: boolean = false; // true：变更内容时不往webview发送内容变更事件，反之发送
-let cherryTheme: string | undefined = vscode.workspace.getConfiguration('cherryMarkdown').get('theme'); // 缓存主题
+let cherryTheme: string | undefined = vscode.workspace
+  .getConfiguration('cherryMarkdown')
+  .get('Theme'); // 缓存主题
 export function activate(context: vscode.ExtensionContext) {
   extensionPath = context.extensionPath;
   // 注册命令
   const disposable = vscode.commands.registerCommand(
     'cherrymarkdown.preview',
     () => {
-      triggerEditorContentChange();
-    }
+      triggerEditorContentChange(true);
+    },
   );
 
   context.subscriptions.push(disposable);
 
   // 打开文件的时候触发
   vscode.workspace.onDidOpenTextDocument(() => {
-    vscode.commands.executeCommand('cherrymarkdown.preview');
+    triggerEditorContentChange();
   });
 
   // 切换文件的时候更新预览区域内容
   vscode.window.onDidChangeActiveTextEditor((e) => {
-    if (e?.document) {
+    const cherryUsage: 'active' | 'only-manual' | undefined = vscode.workspace
+      .getConfiguration('cherryMarkdown')
+      .get('Usage');
+
+    if (e?.document && cherryUsage === 'active') {
       triggerEditorContentChange();
       // 如果打开的不是md文件，则让cherry强制进入预览模式
       if (e.document.languageId !== 'markdown' && targetDocument) {
@@ -51,12 +58,16 @@ export function activate(context: vscode.ExtensionContext) {
     if (!isCherryPanelInit) {
       return true;
     }
-    disableScrollTrigger || cherryPanel.webview.postMessage({ cmd: 'editor-scroll', data: e.visibleRanges[0].start.line });
+    disableScrollTrigger
+      || cherryPanel.webview.postMessage({
+        cmd: 'editor-scroll',
+        data: e.visibleRanges[0].start.line,
+      });
   });
 }
 
 // this method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate() { }
 
 /**
  * 获取当前文件的信息
@@ -68,7 +79,10 @@ const getMarkdownFileInfo = () => {
   let currentDoc = currentEditor?.document;
   let currentText = '';
   let currentTitle = '';
-  if (currentDoc?.languageId !== 'markdown' && targetDocument.document.languageId === 'markdown') {
+  if (
+    currentDoc?.languageId !== 'markdown'
+    && targetDocument.document.languageId === 'markdown'
+  ) {
     currentEditor = targetDocument;
     currentDoc = targetDocument.document;
   }
@@ -79,8 +93,13 @@ const getMarkdownFileInfo = () => {
     currentText = currentDoc?.getText() || '';
     currentTitle = path.basename(currentDoc?.fileName) || '';
   }
-  currentTitle = currentTitle ? `预览 ${currentTitle}   by cherry-markdown` : '不支持当前文件 by cherry-markdown';
-  const theme = cherryTheme ? cherryTheme : vscode.workspace.getConfiguration('cherryMarkdown').get('theme');
+
+  currentTitle = currentTitle
+    ? `${vscode.l10n.t('Preview')} ${currentTitle} ${vscode.l10n.t('By')} Cherry Markdown`
+    : `${vscode.l10n.t('UnSupported')} ${vscode.l10n.t('By')} Cherry Markdown`;
+  const theme = cherryTheme
+    ? cherryTheme
+    : vscode.workspace.getConfiguration('cherryMarkdown').get('Theme');
   const mdInfo = { text: currentText, theme };
   return { mdInfo, currentTitle };
 };
@@ -103,20 +122,24 @@ const initCherryPanel = () => {
         vscode.Uri.file(path.join(extensionPath, 'dist')),
         vscode.Uri.file(workspaceFolder),
       ],
-    }
+    },
   );
-  cherryPanel.webview.html = getWebviewContent(mdInfo, cherryPanel, extensionPath);
+  console.log('vscode.env.language', vscode.env.language);
+  cherryPanel.webview.html = getWebviewContent(
+    { ...mdInfo, vscodeLanguage: vscode.env.language },
+    cherryPanel,
+    extensionPath,
+  );
+  cherryPanel.iconPath = vscode.Uri.file(path.join(extensionPath, 'favicon.ico'));
   isCherryPanelInit = true;
 
   initCherryPanelEvent();
 };
 
-// eslint-disable-next-line no-unused-vars, no-undef
-let scrollTimeOut: NodeJS.Timeout;
-// eslint-disable-next-line no-unused-vars, no-undef
-let editTimeOut: NodeJS.Timeout;
+let scrollTimeOut: ReturnType<typeof setTimeout> | undefined;
+let editTimeOut: ReturnType<typeof setTimeout> | undefined;
 const initCherryPanelEvent = () => {
-  cherryPanel?.webview?.onDidReceiveMessage((e) => {
+  cherryPanel?.webview?.onDidReceiveMessage(async (e) => {
     const { type, data } = e;
     switch (type) {
       // 滚动的时候同步滚动
@@ -135,7 +158,9 @@ const initCherryPanelEvent = () => {
       // 变更主题的时候同时更新配置
       case 'change-theme':
         cherryTheme = data;
-        vscode.workspace.getConfiguration('cherryMarkdown').update('theme', data, true);
+        vscode.workspace
+          .getConfiguration('cherryMarkdown')
+          .update('theme', data, true);
         break;
       // 内容变更的时候同时更新对应的文档内容
       case 'cherry-change':
@@ -143,7 +168,10 @@ const initCherryPanelEvent = () => {
         targetDocument.edit((editBuilder) => {
           const endNum = targetDocument.document.lineCount + 1;
           const end = new vscode.Position(endNum, 0);
-          editBuilder.replace(new vscode.Range(new vscode.Position(0, 0), end), data.markdown);
+          editBuilder.replace(
+            new vscode.Range(new vscode.Position(0, 0), end),
+            data.markdown,
+          );
         });
         editTimeOut && clearTimeout(editTimeOut);
         editTimeOut = setTimeout(() => {
@@ -157,9 +185,46 @@ const initCherryPanelEvent = () => {
         // vscode.window.showInformationMessage('暂不支持展示图片，如需要，请前往 https://github.com/Tencent/cherry-markdown 反馈', 'OK');
         // loadOneImg(data);
         break;
+      case 'upload-file':
+        uploadFileHandler(data).then((res) => {
+          if (res.url !== '') {
+            cherryPanel.webview.postMessage({
+              cmd: 'upload-file-callback',
+              data: res,
+            });
+          } else {
+            vscode.window.showInformationMessage('上传不成功');
+          }
+        });
+        break;
+      case 'open-url': {
+        if (data === 'href-invalid') {
+          vscode.window.showErrorMessage('link is not valid, please check it.');
+          return;
+        }
+        // http/https协议的链接，直接打开
+        if (/^(http|https):\/\//.test(data)) {
+          vscode.env.openExternal(vscode.Uri.parse(data));
+          return;
+        }
+        // 本地绝对路径，打开文件(绝对路径需要解码)
+        const decodedData = decodeURIComponent(data);
+        if (path.isAbsolute(decodedData)) {
+          const decodedDataPath = vscode.Uri.file(decodedData);
+          vscode.commands.executeCommand('vscode.open', decodedDataPath, { preview: true });
+          return;
+        }
+        // 以#开头的锚点不处理
+        if (data.startsWith('#')) {
+          return;
+        }
+        // 本地相对路径，打开文件
+        const uri = vscode.Uri.file(path.join(targetDocument.document.uri.fsPath, '..', data));
+        vscode.commands.executeCommand('vscode.open', uri, { preview: true });
+        break;
+      }
     }
   });
-
   cherryPanel?.onDidDispose(() => {
     isCherryPanelInit = false;
   });
@@ -168,14 +233,19 @@ const initCherryPanelEvent = () => {
 /**
  * 向预览区发送vscode编辑区内容变更的消息
  */
-const triggerEditorContentChange = () => {
+const triggerEditorContentChange = (focus: boolean = false) => {
   if (isCherryPanelInit) {
     const { mdInfo, currentTitle } = getMarkdownFileInfo();
     cherryPanel.title = currentTitle;
     cherryPanel.webview.postMessage({ cmd: 'editor-change', data: mdInfo });
   } else {
     if (vscode.window.activeTextEditor?.document?.languageId === 'markdown') {
-      initCherryPanel();
+      const cherryUsage: 'active' | 'only-manual' | undefined = vscode.workspace
+        .getConfiguration('cherryMarkdown')
+        .get('Usage');
+      if (cherryUsage === 'active' || focus) {
+        initCherryPanel();
+      }
     }
   }
 };

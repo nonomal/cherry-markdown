@@ -20,9 +20,15 @@ import { compileRegExp, EMAIL, EMAIL_INLINE, URL_INLINE_NO_SLASH, URL, URL_NO_SL
 export default class AutoLink extends SyntaxBase {
   static HOOK_NAME = 'autoLink';
 
+  static escapePreservedSymbol = (text) => {
+    // _ prevent conflict with emphasis
+    // _ => 0x5f
+    // * => 0x2a
+    return text.replace(/_/g, '&#x5f;').replace(/\*/g, '&#x2a;');
+  };
+
   constructor({ config, globalConfig }) {
     super({ config });
-    this.urlProcessor = globalConfig.urlProcessor;
     this.enableShortLink = !!config.enableShortLink;
     this.shortLinkLength = config.shortLinkLength;
     // eslint-disable-next-line no-nested-ternary
@@ -215,9 +221,12 @@ export default class AutoLink extends SyntaxBase {
         linkText = url;
       }
     }
-    const processedURL = this.urlProcessor(url, 'autolink');
-    return `<a ${this.target} ${this.rel} title="${$e(url).replace(/_/g, '\\_')}"  href="${encodeURIOnce(
-      processedURL,
-    ).replace(/_/g, '\\_')}">${$e(linkText).replace(/_/g, '\\_')}</a>`;
+    const processedURL = this.$engine.urlProcessor(url, 'autolink');
+    const safeUri = encodeURIOnce(processedURL);
+    const displayUri = $e(linkText);
+    const additionalAttrs = [this.target, this.rel].filter(Boolean).join(' ');
+    return `<a href="${AutoLink.escapePreservedSymbol(safeUri)}" title="${AutoLink.escapePreservedSymbol(
+      $e(url),
+    )}" ${additionalAttrs}>${AutoLink.escapePreservedSymbol(displayUri)}</a>`;
   }
 }

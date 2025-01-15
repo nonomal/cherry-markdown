@@ -38,7 +38,6 @@ class CherryEngine extends CherryStatic {
   };
 
   /**
-   *
    * @param {any} options
    */
   constructor(options) {
@@ -49,14 +48,21 @@ class CherryEngine extends CherryStatic {
 
     if (typeof opts.engine.global.urlProcessor === 'function') {
       opts.engine.global.urlProcessor = urlProcessorProxy(opts.engine.global.urlProcessor);
+      opts.callback.urlProcessor = opts.engine.global.urlProcessor;
+    } else {
+      opts.callback.urlProcessor = urlProcessorProxy(opts.callback.urlProcessor);
     }
 
     // @ts-ignore hack Cherry Instance
-    const $engine = new Engine(opts, { options: opts });
-    return $engine;
+    return new Engine(opts, { options: opts });
   }
 }
 
 export { SyntaxHookBase, MenuHookBase };
 
-export default CherryEngine;
+/**
+ * @typedef {typeof CherryStatic & (new (options: Partial<import('~types/cherry').CherryOptions>) => Engine)}
+ */
+const CherryEngineExport = CherryEngine;
+
+export default CherryEngineExport;

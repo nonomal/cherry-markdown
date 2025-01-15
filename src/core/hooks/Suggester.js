@@ -21,6 +21,7 @@
  */
 import escapeRegExp from 'lodash/escapeRegExp';
 import SyntaxBase from '@/core/SyntaxBase';
+import { allSuggestList, suggesterKeywords } from '@/core/hooks/SuggestList';
 import { Pass } from 'codemirror/src/util/misc';
 import { isLookbehindSupported } from '@/utils/regexp';
 import { replaceLookbehind } from '@/utils/lookbehind-replace';
@@ -53,7 +54,7 @@ import { isBrowser } from '@/utils/env';
 export default class Suggester extends SyntaxBase {
   static HOOK_NAME = 'suggester';
 
-  constructor({ config }) {
+  constructor({ config, cherry }) {
     /**
      * config.suggester 内容
      * [{
@@ -75,103 +76,24 @@ export default class Suggester extends SyntaxBase {
     super({ needCache: true });
 
     this.config = config;
+    this.$cherry = cherry;
+    this.suggesterPanel = new SuggesterPanel(cherry);
+
+    if (!this.inited) {
+      this.initConfig(this.config);
+    }
+
     this.RULE = this.rule();
   }
 
   afterInit(callback) {
+    // node环境下直接跳过输入联想
+    if (!isBrowser()) {
+      return;
+    }
     if (typeof callback === 'function') {
       callback();
     }
-    this.initConfig(this.config);
-  }
-
-  /**
-   * 获取系统默认的候选项列表
-   * TODO：后面考虑增加层级机制，比如“公式”是一级，“集合、逻辑运算、方程式”是公式的二级候选值
-   */
-  getSystemSuggestList() {
-    const locales = this.$locale;
-    const suggestList = [
-      {
-        icon: 'h1',
-        label: locales['H1 Heading'],
-        keyword: 'head1',
-        value: '# ',
-      },
-      {
-        icon: 'h2',
-        label: locales['H2 Heading'],
-        keyword: 'head2',
-        value: '## ',
-      },
-      {
-        icon: 'h3',
-        label: locales['H3 Heading'],
-        keyword: 'head3',
-        value: '### ',
-      },
-      {
-        icon: 'table',
-        label: locales.table,
-        keyword: 'table',
-        value: '| Header | Header | Header |\n| --- | --- | --- |\n| Content | Content | Content |\n',
-      },
-      {
-        icon: 'code',
-        label: locales.code,
-        keyword: 'code',
-        value: '```\n\n```\n',
-      },
-      {
-        icon: 'link',
-        label: locales.link,
-        keyword: 'link',
-        value: `[title](https://url)`,
-      },
-      {
-        icon: 'checklist',
-        label: locales.checklist,
-        keyword: 'checklist',
-        value: `- [ ] item\n- [x] item`,
-      },
-      {
-        icon: 'tips',
-        label: locales.panel,
-        keyword: 'panel tips info warning danger success',
-        value: `::: primary title\ncontent\n:::\n`,
-      },
-      {
-        icon: 'insertFlow',
-        label: locales.detail,
-        keyword: 'detail',
-        value: `+++ 点击展开更多\n内容\n++- 默认展开\n内容\n++ 默认收起\n内容\n+++\n`,
-      },
-      // {
-      //   icon: 'pen',
-      //   label: '续写',
-      //   keyword: 'xu xie chatgpt',
-      //   value: () => {
-      //     if (!this.$engine.$cherry.options.openai.apiKey) {
-      //       return '请先配置openai apiKey';
-      //     }
-      //     this.$engine.$cherry.toolbar.toolbarHandlers.chatgpt('complement');
-      //     return `\n`;
-      //   },
-      // },
-      // {
-      //   icon: 'pen',
-      //   label: '总结',
-      //   keyword: 'zong jie chatgpt',
-      //   value: () => {
-      //     if (!this.$engine.$cherry.options.openai.apiKey) {
-      //       return '请先配置openai apiKey';
-      //     }
-      //     this.$engine.$cherry.toolbar.toolbarHandlers.chatgpt('summary');
-      //     return `\n`;
-      //   },
-      // },
-    ];
-    return suggestList;
   }
 
   /**
@@ -182,29 +104,52 @@ export default class Suggester extends SyntaxBase {
     let { suggester } = config;
 
     this.suggester = {};
-    if (!suggester) {
-      suggester = [];
-    }
-    const systemSuggestList = this.getSystemSuggestList();
+    const defaultSuggest = [];
+    const that = this;
     // 默认的唤醒关键字
-    suggester.unshift({
-      keyword: '/',
-      suggestList(word, callback) {
-        const $word = word.replace(/^\//, '');
-        // 加个空格就直接退出联想
-        if (/^\s$/.test($word)) {
-          callback(false);
-          return;
-        }
-        const keyword = $word.replace(/\s+/g, '').split('').join('.*?');
-        const test = new RegExp(`^.*?${keyword}.*?$`, 'i');
-        const suggestList = systemSuggestList.filter((item) => {
-          // TODO: 首次联想的时候会把所有的候选项列出来，后续可以增加一些机制改成默认拉取一部分候选项
-          return !$word || test.test(item.keyword);
-        });
-        callback(suggestList);
-      },
-    });
+    for (const suggesterKeyword of suggesterKeywords) {
+      defaultSuggest.push({
+        keyword: suggesterKeyword,
+        suggestList(_word, callback) {
+          // 将word全转成小写
+          const word = _word.toLowerCase();
+          const systemSuggestList = allSuggestList(suggesterKeyword, that.$locale);
+          // 加个空格就直接退出联想
+          if (/^\s$/.test(word)) {
+            callback(false);
+            return;
+          }
+          const keyword = word
+            .replace(/\s+/g, '') // 删掉空格，避免产生不必要的空数组元素
+            .replace(new RegExp(`^${suggesterKeyword}`, 'g'), '') // 删掉word当中suggesterKeywords出现的字符
+            .replace(/^[#]+/, '#')
+            .replace(/^[/]+/, '/')
+            .split('')
+            .join('.*?');
+          // 匹配任何包含 "keyword" 的字符串，无论 "keyword" 是在字符串的开头、中间还是结尾，并且不区分大小写
+          const test = new RegExp(`^.*?${keyword}.*?$`, 'i');
+          const suggestList = systemSuggestList.filter((item) => {
+            // 处理精确匹配
+            if (item.exactMatch) {
+              return !word || item.keyword === word;
+            }
+            // TODO: 首次联想的时候会把所有的候选项列出来，后续可以增加一些机制改成默认拉取一部分候选项
+            return !word || test.test(item.keyword);
+          });
+          // 当没有候选项时直接推出联想
+          callback(suggestList.length === 0 ? false : suggestList);
+        },
+        echo() {
+          return '';
+        },
+      });
+    }
+    if (!suggester) {
+      suggester = defaultSuggest;
+    } else {
+      suggester = defaultSuggest.concat(suggester);
+    }
+
     suggester.forEach((configItem) => {
       if (!configItem.suggestList) {
         console.warn('[cherry-suggester]: the suggestList of config is missing.');
@@ -218,18 +163,20 @@ export default class Suggester extends SyntaxBase {
     });
 
     // 反复初始化时， 缓存还在， dom 已更新情况
-    if (suggesterPanel.hasEditor()) {
-      suggesterPanel.editor = null;
+    if (this.suggesterPanel.hasEditor()) {
+      this.suggesterPanel.editor = null;
     }
+
+    this.inited = true;
   }
 
   makeHtml(str) {
     if (!this.RULE.reg) return str;
-    if (!suggesterPanel.hasEditor() && isBrowser()) {
+    if (!this.suggesterPanel.hasEditor() && isBrowser()) {
       const { editor } = this.$engine.$cherry;
-      suggesterPanel.setEditor(editor);
-      suggesterPanel.setSuggester(this.suggester);
-      suggesterPanel.bindEvent();
+      this.suggesterPanel.setEditor(editor);
+      this.suggesterPanel.setSuggester(this.suggester);
+      this.suggesterPanel.bindEvent();
     }
     if (isLookbehindSupported()) {
       return str.replace(this.RULE.reg, this.toHtml.bind(this));
@@ -254,46 +201,58 @@ export default class Suggester extends SyntaxBase {
   }
 
   rule() {
-    if (!this.suggester || Object.keys(this.suggester).length <= 0) {
+    if (!this.config?.suggester || Object.keys(this.config?.suggester).length <= 0) {
       return {};
     }
-    const keys = Object.keys(this.suggester)
-      .map((key) => escapeRegExp(key))
-      .join('|');
+
+    let suggester;
+    if (Array.isArray(this.config.suggester)) {
+      suggester = this.config.suggester.map((obj) => obj.keyword || '');
+    } else {
+      suggester = Object.keys(this.config.suggester).map((key) => this.config.suggester[key].keyword || '');
+    }
+
+    const keys = suggester.map((key) => escapeRegExp(key)).join('|');
     const reg = new RegExp(
       `${isLookbehindSupported() ? '((?<!\\\\))[ ]' : '(^|[^\\\\])[ ]'}(${keys})(([^${keys}\\s])+)`,
       'g',
     );
-    return {
+    return /** @type {any} */ ({
       reg,
-    };
+    });
   }
 
   mounted() {
-    if (!suggesterPanel.hasEditor() && isBrowser()) {
+    if (!this.suggesterPanel.hasEditor() && isBrowser()) {
       const { editor } = this.$engine.$cherry;
-      suggesterPanel.setEditor(editor);
-      suggesterPanel.setSuggester(this.suggester);
-      suggesterPanel.bindEvent();
+      this.suggesterPanel.setEditor(editor);
+      this.suggesterPanel.setSuggester(this.suggester);
+      this.suggesterPanel.bindEvent();
     }
   }
 }
 
 class SuggesterPanel {
-  constructor() {
+  constructor(cherry) {
     this.searchCache = false;
     this.searchKeyCache = [];
     this.optionList = [];
     this.cursorMove = true;
     this.suggesterConfig = {};
+    this.$cherry = cherry;
+  }
 
+  /**
+   * 如果没有panel，则尝试初始化一个，在node模式不初始化
+   */
+  tryCreatePanel() {
     if (!this.$suggesterPanel && isBrowser() && document) {
-      document?.body?.appendChild(this.createDom(SuggesterPanel.panelWrap));
-      this.$suggesterPanel = document?.querySelector('.cherry-suggester-panel');
+      this.$cherry.wrapperDom.appendChild(this.createDom(this.panelWrap));
+      this.$suggesterPanel = this.$cherry.wrapperDom.querySelector('.cherry-suggester-panel');
     }
   }
 
-  static panelWrap = `<div class="cherry-suggester-panel"></div>`;
+  panelWrap = `<div class="cherry-suggester-panel"></div>`;
 
   hasEditor() {
     return !!this.editor && !!this.editor.editor.display && !!this.editor.editor.display.wrapper;
@@ -312,6 +271,9 @@ class SuggesterPanel {
   }
 
   bindEvent() {
+    if (!this.editor.options.showSuggestList) {
+      return;
+    }
     let keyAction = false;
     this.editor.editor.on('change', (codemirror, evt) => {
       keyAction = true;
@@ -339,7 +301,7 @@ class SuggesterPanel {
       if (typeof extraKeys[key] === 'function') {
         const proxyTarget = extraKeys[key];
         extraKeys[key] = (codemirror) => {
-          if (suggesterPanel.cursorMove) {
+          if (this.cursorMove) {
             const res = proxyTarget.call(codemirror, codemirror);
 
             if (res) {
@@ -351,7 +313,7 @@ class SuggesterPanel {
         };
       } else if (!extraKeys[key]) {
         extraKeys[key] = () => {
-          if (suggesterPanel.cursorMove) {
+          if (this.cursorMove) {
             // logic to decide whether to move up or not
             return Pass.toString();
           }
@@ -359,7 +321,7 @@ class SuggesterPanel {
       } else if (typeof extraKeys[key] === 'string') {
         const command = extraKeys[key];
         extraKeys[key] = (codemirror) => {
-          if (suggesterPanel.cursorMove) {
+          if (this.cursorMove) {
             this.editor.editor.execCommand(command);
 
             // logic to decide whether to move up or not
@@ -379,10 +341,11 @@ class SuggesterPanel {
       this.relocatePanel(this.editor.editor);
     });
 
-    this.onClickPancelItem();
+    this.onClickPanelItem();
   }
 
-  onClickPancelItem() {
+  onClickPanelItem() {
+    this.tryCreatePanel();
     this.$suggesterPanel.addEventListener(
       'click',
       (evt) => {
@@ -402,10 +365,11 @@ class SuggesterPanel {
     }
   }
 
-  showsuggesterPanel({ left, top, items }) {
+  showSuggesterPanel({ left, top, items }) {
+    this.tryCreatePanel();
     if (!this.$suggesterPanel && isBrowser()) {
-      document.body.appendChild(this.createDom(SuggesterPanel.panelWrap));
-      this.$suggesterPanel = document.querySelector('.cherry-suggester-panel');
+      this.$cherry.wrapperDom.appendChild(this.createDom(this.panelWrap));
+      this.$suggesterPanel = this.$cherry.wrapperDom.querySelector('.cherry-suggester-panel');
     }
     this.updatePanel(items);
     this.$suggesterPanel.style.left = `${left}px`;
@@ -415,7 +379,8 @@ class SuggesterPanel {
     this.$suggesterPanel.style.zIndex = '100';
   }
 
-  hidesuggesterPanel() {
+  hideSuggesterPanel() {
+    this.tryCreatePanel();
     // const $suggesterPanel = document.querySelector('.cherry-suggester-panel');
     if (this.$suggesterPanel) {
       this.$suggesterPanel.style.display = 'none';
@@ -427,6 +392,7 @@ class SuggesterPanel {
    * @param {SuggestList} suggestList
    */
   updatePanel(suggestList) {
+    this.tryCreatePanel();
     let defaultValue = suggestList
       .map((suggest, idx) => {
         if (typeof suggest === 'object' && suggest !== null) {
@@ -434,9 +400,9 @@ class SuggesterPanel {
           if (suggest?.icon) {
             renderContent = `<i class="ch-icon ch-icon-${suggest.icon}"></i>${renderContent}`;
           }
-          return this.renderPanelItem(renderContent, idx === 0);
+          return this.renderPanelItem(renderContent, false);
         }
-        return this.renderPanelItem(suggest, idx === 0);
+        return this.renderPanelItem(suggest, false);
       })
       .join('');
     /**
@@ -490,16 +456,20 @@ class SuggesterPanel {
 
   // 面板重定位
   relocatePanel(codemirror) {
-    const $cursor = document.querySelector('.CodeMirror-cursors .CodeMirror-cursor');
+    // 找到光标位置来确定候选框位置
+    let $cursor = this.$cherry.wrapperDom.querySelector('.CodeMirror-cursors .CodeMirror-cursor');
+    // 当editor选中某一内容时，".CodeMirror-cursor"会消失，此时通过定位".selected"来确定候选框位置
+    if (!$cursor) {
+      $cursor = this.$cherry.wrapperDom.querySelector('.CodeMirror-selected');
+    }
     if (!$cursor) {
       return false;
     }
-    const pos = codemirror.getCursor();
-    const lineHeight = codemirror.lineInfo(pos.line).handle.height;
+    const editorDomRect = this.$cherry.wrapperDom.getBoundingClientRect();
     const rect = $cursor.getBoundingClientRect();
-    const top = rect.top + lineHeight;
-    const { left } = rect;
-    this.showsuggesterPanel({ left, top, items: this.optionList });
+    const top = rect.top + rect.height + 5 - editorDomRect.top;
+    const left = rect.left - editorDomRect.left;
+    this.showSuggesterPanel({ left, top, items: this.optionList });
   }
 
   /**
@@ -528,7 +498,7 @@ class SuggesterPanel {
 
   // 关闭关联
   stopRelate() {
-    this.hidesuggesterPanel();
+    this.hideSuggesterPanel();
     this.cursorFrom = null;
     this.cursorTo = null;
     this.keyword = '';
@@ -544,7 +514,7 @@ class SuggesterPanel {
    * @param {KeyboardEvent} evt 键盘事件
    */
   pasteSelectResult(idx, evt) {
-    if (!this.cursorTo) {
+    if (!this.cursorTo || this.cursorTo === this.cursorFrom) {
       this.cursorTo = JSON.parse(JSON.stringify(this.cursorFrom));
     }
     if (!this.cursorTo) {
@@ -560,20 +530,37 @@ class SuggesterPanel {
         typeof this.optionList[idx].value === 'string'
       ) {
         result = this.optionList[idx].value;
-      }
-      if (
+      } else if (
         typeof this.optionList[idx] === 'object' &&
         this.optionList[idx] !== null &&
         typeof this.optionList[idx].value === 'function'
       ) {
         result = this.optionList[idx].value();
-      }
-      if (typeof this.optionList[idx] === 'string') {
+      } else {
         result = ` ${this.keyword}${this.optionList[idx]} `;
       }
       // this.cursorTo.ch = this.cursorFrom.ch + result.length;
       if (result) {
         this.editor.editor.replaceRange(result, cursorFrom, cursorTo);
+      }
+      // 控制光标左移若干位
+      if (this.optionList[idx].goLeft) {
+        const cursor = this.editor.editor.getCursor();
+        this.editor.editor.setCursor(cursor.line, cursor.ch - this.optionList[idx].goLeft);
+      }
+      // 控制光标上移若干位
+      if (this.optionList[idx].goTop) {
+        const cursor = this.editor.editor.getCursor();
+        this.editor.editor.setCursor(cursor.line - this.optionList[idx].goTop, cursor.ch);
+      }
+      // 选中某个范围
+      if (this.optionList[idx].selection) {
+        const { line } = this.editor.editor.getCursor();
+        const { ch } = this.editor.editor.getCursor();
+        this.editor.editor.setSelection(
+          { line, ch: ch - this.optionList[idx].selection.from },
+          { line, ch: ch - this.optionList[idx].selection.to },
+        );
       }
     }
   }
@@ -640,15 +627,26 @@ class SuggesterPanel {
    * @param {KeyboardEvent} evt
    */
   onKeyDown(codemirror, evt) {
+    this.tryCreatePanel();
     if (!this.$suggesterPanel) {
       return false;
     }
     const { keyCode } = evt;
     // up down
     if ([38, 40].includes(keyCode)) {
+      // issue 558
+      if (this.optionList.length === 0) {
+        setTimeout(() => {
+          this.stopRelate();
+        }, 0);
+        return;
+      }
+
       this.cursorMove = false;
 
-      const selectedItem = this.$suggesterPanel.querySelector('.cherry-suggester-panel__item--selected');
+      const selectedItem =
+        this.$suggesterPanel.querySelector('.cherry-suggester-panel__item--selected') ||
+        this.$suggesterPanel.querySelector('.cherry-suggester-panel__item:last-child');
       let nextElement = null;
       if (keyCode === 38 && !selectedItem.previousElementSibling) {
         nextElement = this.$suggesterPanel.lastElementChild;
@@ -667,11 +665,29 @@ class SuggesterPanel {
       selectedItem.classList.remove('cherry-suggester-panel__item--selected');
 
       nextElement.classList.add('cherry-suggester-panel__item--selected');
+
+      // 提示面板高度
+      const suggestPanelHeight = this.$suggesterPanel.offsetHeight;
+      // 可视区域范围上端
+      const viewTop = this.$suggesterPanel.scrollTop;
+      // 可视区域范围下端
+      const viewBottom = viewTop + suggestPanelHeight;
+      // item的上端
+      const nextEleTop = nextElement.offsetTop;
+      // item高度
+      const nextEleHeight = nextElement.offsetHeight;
+      // 当前元素全部或部分在可视区域之外，就滚动
+      if (nextEleTop < viewTop || nextEleTop + nextEleHeight > viewBottom) {
+        this.$suggesterPanel.scrollTop = nextEleTop - suggestPanelHeight / 2;
+      }
     } else if (keyCode === 13) {
-      evt.stopPropagation();
-      this.cursorMove = false;
-      this.pasteSelectResult(this.findSelectedItemIndex(), evt);
-      codemirror.focus();
+      const index = this.findSelectedItemIndex();
+      if (index >= 0) {
+        evt.stopPropagation();
+        this.cursorMove = false;
+        this.pasteSelectResult(index, evt);
+        codemirror.focus();
+      }
       // const cache = JSON.parse(JSON.stringify(this.cursorTo));
       // setTimeout(() => {
       //   codemirror.setCursor(cache);
@@ -679,8 +695,8 @@ class SuggesterPanel {
       setTimeout(() => {
         this.stopRelate();
       }, 0);
-    } else if (keyCode === 27) {
-      // 按下esc的时候退出联想
+    } else if (keyCode === 27 || keyCode === 0x25 || keyCode === 0x27) {
+      // 按下esc或者←、→键的时候退出联想
       evt.stopPropagation();
       codemirror.focus();
       setTimeout(() => {
@@ -689,5 +705,3 @@ class SuggesterPanel {
     }
   }
 }
-
-const suggesterPanel = new SuggesterPanel();

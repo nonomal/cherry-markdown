@@ -32,14 +32,111 @@ const callbacks = {
         isShadow: true,
         isRadius: true,
       });
+    } else if (/image/i.test(file.type)) {
+      // 如果上传的是图片，则默认回显base64内容（因为没有图床）
+      // 创建 FileReader 对象
+      const reader = new FileReader();
+      // 读取文件内容
+      reader.onload = (event) => {
+        // 获取 base64 内容
+        const base64Content = event.target.result;
+        callback(base64Content, {
+          name: `${file.name.replace(/\.[^.]+$/, '')}`,
+          isShadow: true,
+          width: '60%',
+          height: 'auto',
+        });
+      };
+      reader.readAsDataURL(file);
     } else {
-      callback('images/demo-dog.png', { name: `${file.name.replace(/\.[^.]+$/, '')}`, isShadow: true });
+      callback('images/demo-dog.png');
     }
+  },
+  fileUploadMulti(files, callback) {
+    const fileType = files[0].type;
+    const promises = [];
+    for (const file of files) {
+      const promise = new Promise((resolve) => {
+        if (/video/i.test(fileType)) {
+          resolve({
+            url: 'images/demo-dog.png',
+            params: {
+              name: `${file.name.replace(/\.[^.]+$/, '')}`,
+              poster: 'images/demo-dog.png?poster=true',
+              isBorder: true,
+              isShadow: true,
+              isRadius: true,
+            },
+          });
+        } else if (/image/i.test(fileType)) {
+          // 如果上传的是图片，则默认回显base64内容（因为没有图床）
+          // 创建 FileReader 对象
+          const reader = new FileReader();
+          // 读取文件内容
+          reader.onload = (event) => {
+            // 获取 base64 内容
+            const base64Content = event.target.result;
+            resolve({
+              url: base64Content,
+              params: {
+                name: `${file.name.replace(/\.[^.]+$/, '')}`,
+                isShadow: true,
+                width: '60%',
+                height: 'auto',
+              },
+            });
+          };
+          reader.readAsDataURL(file);
+        } else if (/audio/i.test(fileType)) {
+          resolve({
+            url: 'images/demo-dog.png',
+            params: {
+              name: `${file.name.replace(/\.[^.]+$/, '')}`,
+              poster: 'images/demo-dog.png?poster=true',
+              isBorder: true,
+              isShadow: true,
+              isRadius: true,
+            },
+          });
+        } else {
+          resolve('images/demo-dog.png');
+        }
+      });
+      promises.push(promise);
+    }
+    Promise.all(promises).then((results) => {
+      callback(results);
+    });
   },
   afterChange: (text, html) => {},
   afterInit: (text, html) => {},
   beforeImageMounted: (srcProp, src) => ({ srcProp, src }),
   onClickPreview: (event) => {},
+  onExpandCode: (event, code) => {
+    // 阻止默认的粘贴事件
+    // return false;
+    // 对复制内容进行额外处理
+    // console.log(event, code);
+    return code;
+  },
+  onUnExpandCode: (event, code) => {
+    // 阻止默认的粘贴事件
+    // return false;
+    // 对复制内容进行额外处理
+    // console.log(event, code);
+    return code;
+  },
+  /**
+   * 粘贴时触发
+   * @param {ClipboardEvent['clipboardData']} clipboardData
+   * @param {object} cherry
+   * @returns
+   *    false: 走cherry粘贴的默认逻辑
+   *    string: 直接粘贴的内容
+   */
+  onPaste: (clipboardData, cherry) => {
+    return false;
+  },
   onCopyCode: (event, code) => {
     // 阻止默认的粘贴事件
     // return false;
@@ -81,13 +178,6 @@ const defaultConfig = {
       // false： 一个换行会转成<br>，两个连续换行会分割成段落，三个以上连续换行会转成<br>并分割段落
       classicBr: false,
       /**
-       * 全局的URL处理器
-       * @param {string} url 来源url
-       * @param {'image'|'audio'|'video'|'autolink'|'link'} srcType 来源类型
-       * @returns
-       */
-      urlProcessor: callbacks.urlProcessor,
-      /**
        * 额外允许渲染的html标签
        * 标签以英文竖线分隔，如：htmlWhiteList: 'iframe|script|style'
        * 默认为空，默认允许渲染的html见src/utils/sanitize.js whiteList 属性
@@ -96,6 +186,24 @@ const defaultConfig = {
        *    - 一般编辑权限可控的场景（如api文档系统）可以允许iframe、script等标签
        */
       htmlWhiteList: '',
+      /**
+       * 适配流式会话的场景，开启后将具备以下特性：
+       * - cherry渲染频率从50ms/次提升到10ms/次
+       * - 代码块自动闭合，相当于强制 `engine.syntax.codeBlock.selfClosing=true`
+       * - 文章末尾的段横线标题语法（`\n-`）失效
+       * - 表格语法自动闭合，相当于强制`engine.syntax.table.selfClosing=true`
+       * - 加粗、斜体语法自动闭合，相当于强制`engine.syntax.fontEmphasis.selfClosing=true`
+       *
+       * 后续如果有新的需求，可提issue反馈
+       */
+      flowSessionContext: true,
+      /**
+       * 流式会话时，在最后位置增加一个类似光标的dom
+       * - 'default'：用cherry提供的默认样式
+       * - ''：不增加任何dom
+       * - '<span class="custom-cursor"></span>': 自定义的dom
+       */
+      flowSessionCursor: '',
     },
     // 内置语法配置
     syntax: {
@@ -117,7 +225,7 @@ const defaultConfig = {
         /** 生成的<a>标签追加rel属性的默认值 空：在<a>标签里不会追加rel属性， nofollow：在<a>标签里追加rel="nofollow：在"属性*/
         rel: '',
         /** 是否开启短链接 */
-        enableShortLink: true,
+        enableShortLink: false,
         /** 短链接长度 */
         shortLinkLength: 20,
       },
@@ -127,17 +235,25 @@ const defaultConfig = {
       },
       table: {
         enableChart: false,
+        selfClosing: false, // 自动闭合，为true时，当输入第一行table内容时，cherry会自动按表格进行解析
         // chartRenderEngine: EChartsTableEngine,
         // externals: ['echarts'],
       },
       inlineCode: {
-        theme: 'red',
+        /**
+         * @deprecated 不再支持theme的配置，统一在`themeSettings.inlineCodeTheme`中配置
+         */
+        // theme: 'red',
       },
       codeBlock: {
-        theme: 'dark', // 默认为深色主题
+        // theme: 'dark', //  @deprecated 不再支持theme的配置，统一在`themeSettings.codeBlockTheme`中配置
         wrap: true, // 超出长度是否换行，false则显示滚动条
         lineNumber: true, // 默认显示行号
         copyCode: true, // 是否显示“复制”按钮
+        editCode: true, // 是否显示“编辑”按钮
+        changeLang: true, // 是否显示“切换语言”按钮
+        expandCode: false, // 是否展开/收起代码块，当代码块行数大于10行时，会自动收起代码块
+        selfClosing: true, // 自动闭合，为true时，当md中有奇数个```时，会自动在md末尾追加一个```
         customRenderer: {
           // 自定义语法渲染器
         },
@@ -156,6 +272,10 @@ const defaultConfig = {
          *        indentedCodeBlock：false
          */
         indentedCodeBlock: true,
+        /**
+         * 自定义按钮，出现在代码块右上角
+         **/
+        customBtns: [],
       },
       emoji: {
         useUnicode: true, // 是否使用unicode进行渲染
@@ -173,6 +293,7 @@ const defaultConfig = {
          *           __hello__    ====>   <strong>hello</strong>
          */
         allowWhitespace: false,
+        selfClosing: false, // 自动闭合，为true时，当输入**XXX时，会自动在末尾追加**
       },
       strikethrough: {
         /**
@@ -200,6 +321,8 @@ const defaultConfig = {
       toc: {
         /** 默认只渲染一个目录 */
         allowMultiToc: false,
+        /** 是否显示自增序号 */
+        showAutoNumber: false,
       },
       header: {
         /**
@@ -209,6 +332,24 @@ const defaultConfig = {
          *  - none          标题没有锚点
          */
         anchorStyle: 'default',
+        /**
+         * 是否开启严格模式
+         *    true：严格模式
+         *      # head ⭕️ valid
+         *      #head ❌ invalid
+         *    false：宽松模式
+         *      # head ⭕️ valid
+         *      #head ⭕️ valid
+         */
+        strict: false,
+      },
+      htmlBlock: {
+        /**
+         * 是否过滤html标签中的style属性
+         *    true：过滤style属性
+         *    false：不过滤style属性
+         */
+        filterStyle: false,
       },
     },
   },
@@ -216,7 +357,10 @@ const defaultConfig = {
     id: 'code', // textarea 的id属性值
     name: 'code', // textarea 的name属性值
     autoSave2Textarea: false, // 是否自动将编辑区的内容回写到textarea里
-    theme: 'default', // depend on codemirror theme name: https://codemirror.net/demo/theme.htm
+    /**
+     * @deprecated 不再支持theme的配置，废弃该功能，统一由`themeSettings.mainTheme`配置
+     */
+    // theme: 'default',
     // 编辑器的高度，默认100%，如果挂载点存在内联设置的height则以内联样式为主
     height: '100%',
     // defaultModel 编辑器初始化后的默认模式，一共有三种模式：1、双栏编辑预览模式；2、纯编辑模式；3、预览模式
@@ -226,14 +370,22 @@ const defaultConfig = {
     defaultModel: 'edit&preview',
     // 粘贴时是否自动将html转成markdown
     convertWhenPaste: true,
+    // 快捷键风格，目前仅支持 sublime 和 vim
+    keyMap: 'sublime',
     codemirror: {
       // 是否自动focus 默认为true
       autofocus: true,
     },
     writingStyle: 'normal', // 书写风格，normal 普通 | typewriter 打字机 | focus 专注，默认normal
+    keepDocumentScrollAfterInit: false, // 在初始化后是否保持网页的滚动，true：保持滚动；false：网页自动滚动到cherry初始化的位置
+    showFullWidthMark: true, // 是否高亮全角符号 ·|￥|、|：|“|”|【|】|（|）|《|》
+    showSuggestList: true, // 是否显示联想框
   },
   toolbars: {
-    theme: 'dark', // light or dark
+    /**
+     * @deprecated 不再支持theme的配置，统一在`themeSettings.toolbarTheme`中配置
+     */
+    // theme: 'dark', // light or dark
     showToolbar: true, // false：不展示顶部工具栏； true：展示工具栏; toolbars.showToolbar=false 与 toolbars.toolbar=false 等效
     toolbar: [
       'bold',
@@ -267,17 +419,72 @@ const defaultConfig = {
         ],
       },
       'graph',
-      'settings',
+      'shortcutKey',
+      'togglePreview',
     ],
     toolbarRight: [],
-    sidebar: [],
+    sidebar: false,
     bubble: ['bold', 'italic', 'underline', 'strikethrough', 'sub', 'sup', 'quote', '|', 'size', 'color'], // array or false
     float: ['h1', 'h2', 'h3', '|', 'checklist', 'quote', 'table', 'code'], // array or false
+    hiddenToolbar: [], // 不展示在编辑器中的工具栏，只使用工具栏的api和快捷键功能
+    toc: false, // 不展示悬浮目录
+    // toc: {
+    //   updateLocationHash: false, // 要不要更新URL的hash
+    //   defaultModel: 'full', // pure: 精简模式/缩略模式，只有一排小点； full: 完整模式，会展示所有标题
+    //   showAutoNumber: false, // 是否显示自增序号
+    //   position: 'absolute', // 悬浮目录的悬浮方式。当滚动条在cherry内部时，用absolute；当滚动条在cherry外部时，用fixed
+    //   cssText: '', // 自定义样式
+    // },
+    /**
+     * 自定义快捷键
+     * @deprecated 请使用`shortcutKeySettings`
+     */
+    shortcutKey: {
+      // 'Alt-1': 'header',
+      // 'Alt-2': 'header',
+      // 'Ctrl-b': 'bold',
+      // 'Ctrl-Alt-m': 'formula',
+    },
+    shortcutKeySettings: {
+      /** 是否替换已有的快捷键, true: 替换默认快捷键； false： 会追加到默认快捷键里，相同的shortcutKey会覆盖默认的 */
+      isReplace: false,
+      shortcutKeyMap: {
+        // 'Alt-Digit1': {
+        //   hookName: 'header',
+        //   aliasName: '标题',
+        // },
+        // 'Control-Shift-KeyB': {
+        //   hookName: 'bold',
+        //   aliasName: '加粗',
+        // },
+      },
+    },
+    // 一些按钮的配置信息
+    config: {
+      formula: {
+        showLatexLive: true, // true: 显示 www.latexlive.com 外链； false：不显示
+        templateConfig: false, // false: 使用默认模板
+      },
+      changeLocale: [
+        {
+          locale: 'zh_CN',
+          name: '中文',
+        },
+        {
+          locale: 'en_US',
+          name: 'English',
+        },
+        {
+          locale: 'ru_RU',
+          name: 'Русский',
+        },
+      ],
+    },
   },
   // 打开draw.io编辑页的url，如果为空则drawio按钮失效
   drawioIframeUrl: '',
-  // 上传文件的回调
-  fileUpload: callbacks.fileUpload,
+  // drawio iframe的样式
+  drawioIframeStyle: 'border: none;',
   /**
    * 上传文件的时候用来指定文件类型
    */
@@ -289,22 +496,67 @@ const defaultConfig = {
     pdf: '.pdf',
     file: '*',
   },
+  /**
+   * 上传文件的时候是否开启多选
+   */
+  multipleFileSelection: {
+    video: false,
+    audio: false,
+    image: false,
+    word: false,
+    pdf: false,
+    file: false,
+  },
   callback: {
-    afterChange: callbacks.afterChange,
-    afterInit: callbacks.afterInit,
+    /**
+     * 全局的URL处理器
+     * @param {string} url 来源url
+     * @param {'image'|'audio'|'video'|'autolink'|'link'} srcType 来源类型
+     * @returns
+     */
+    urlProcessor: callbacks.urlProcessor,
+    // 上传文件的回调
+    fileUpload: callbacks.fileUpload,
+    // 上传多文件的回调
+    fileUploadMulti: callbacks.fileUploadMulti,
     beforeImageMounted: callbacks.beforeImageMounted,
-    // 预览区域点击事件，previewer.enablePreviewerBubble = true 时生效
+    // 预览区域点击事件
     onClickPreview: callbacks.onClickPreview,
     // 复制代码块代码时的回调
     onCopyCode: callbacks.onCopyCode,
+    // 展开代码块代码时的回调
+    onExpandCode: callbacks.onExpandCode,
+    // 缩起代码块代码时的回调
+    onUnExpandCode: callbacks.onUnExpandCode,
     // 把中文变成拼音的回调，当然也可以把中文变成英文、英文变成中文
     changeString2Pinyin: callbacks.changeString2Pinyin,
+    /**
+     * 粘贴时触发
+     * @param {ClipboardEvent['clipboardData']} clipboardData
+     * @param {Cherry} cherry
+     * @returns
+     *    false: 走cherry粘贴的默认逻辑
+     *    string: 直接粘贴的内容
+     */
+    onPaste: callbacks.onPaste,
+  },
+  event: {
+    // 当编辑区内容有实际变化时触发
+    afterChange: callbacks.afterChange,
+    afterInit: callbacks.afterInit,
+    focus: ({ e, cherry }) => {},
+    blur: ({ e, cherry }) => {},
+    selectionChange: ({ selections, lastSelections, info }) => {},
+    afterChangeLocale: (locale) => {},
+    changeMainTheme: (theme) => {},
+    changeCodeBlockTheme: (theme) => {},
   },
   previewer: {
     dom: false,
     className: 'cherry-markdown',
     // 是否启用预览区域编辑能力（目前支持编辑图片尺寸、编辑表格内容）
     enablePreviewerBubble: true,
+    floatWhenClosePreviewer: false,
     /**
      * 配置图片懒加载的逻辑
      * - 如果不希望图片懒加载，可配置成 lazyLoadImg = {noLoadImgNum: -1}
@@ -338,18 +590,24 @@ const defaultConfig = {
       afterLoadAllImgCallback: () => {},
     },
   },
-  /**
-   * 配置主题，第三方可以自行扩展主题
-   */
-  theme: [
-    { className: 'default', label: '默认' },
-    { className: 'dark', label: '暗黑' },
-    { className: 'light', label: '明亮' },
-    { className: 'green', label: '清新' },
-    { className: 'red', label: '热情' },
-    { className: 'violet', label: '淡雅' },
-    { className: 'blue', label: '清幽' },
-  ],
+  /** 定义cherry缓存的作用范围，相同nameSpace的实例共享localStorage缓存 */
+  nameSpace: 'cherry',
+  themeSettings: {
+    // 主题列表，用于切换主题
+    themeList: [
+      { className: 'default', label: '默认' },
+      { className: 'dark', label: '暗黑' },
+      { className: 'light', label: '明亮' },
+      { className: 'green', label: '清新' },
+      { className: 'red', label: '热情' },
+      { className: 'violet', label: '淡雅' },
+      { className: 'blue', label: '清幽' },
+    ],
+    mainTheme: 'light',
+    codeBlockTheme: 'default',
+    inlineCodeTheme: 'red', // red or black
+    toolbarTheme: 'dark', // light or dark 优先级低于mainTheme
+  },
   // 预览页面不需要绑定事件
   isPreviewOnly: false,
   // 预览区域跟随编辑器光标自动滚动
@@ -358,6 +616,10 @@ const defaultConfig = {
   forceAppend: true,
   // The locale Cherry is going to use. Locales live in /src/locales/
   locale: 'zh_CN',
+  // Supplementary locales
+  locales: {},
+  // cherry初始化后是否检查 location.hash 尝试滚动到对应位置
+  autoScrollByHashAfterInit: false,
 };
 
 export default cloneDeep(defaultConfig);

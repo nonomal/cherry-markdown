@@ -37,6 +37,12 @@ export const ALLOW_WHITESPACE_MULTILINE = '(?:.*?)(?:(?:\\n.*?)*?)';
 export const DO_NOT_STARTS_AND_END_WITH_SPACES = '(?:\\S|(?:\\S.*?\\S))';
 export const DO_NOT_STARTS_AND_END_WITH_SPACES_MULTILINE =
   '(?:(?:\\S|(?:\\S[^\\n]*?\\S))(?:\\n(?:\\S|(?:\\S[^\\n]*?\\S)))*?)';
+
+/**
+ * @deprecated
+ *
+ * 存在严重性能问题，应弃用
+ */
 export const DO_NOT_STARTS_AND_END_WITH_SPACES_MULTILINE_ALLOW_EMPTY = '(?:(?:\\S|(?:\\S.*?\\S))(?:[ \\t]*\\n.*?)*?)';
 
 export const NOT_ALL_WHITE_SPACES_INLINE = '(?:[^\\n]*?\\S[^\\n]*?)';
@@ -111,6 +117,10 @@ export const URL_NO_SLASH = new RegExp(`^${URL_INLINE_NO_SLASH.source}$`);
 
 export const URL = new RegExp(`^${URL_INLINE.source}$`);
 
+// 正则结果[全部, 判定符之前的空格或者tab, 判定符, checkbox内容(没有就是undefined), 列表内容]
+export const LIST_CONTENT =
+  /^([ \t]*)([*+-][ ](\[[ x]\])?|[0-9一二三四五六七八九十零]+\.|[a-z]\.|\b(?:M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3}))\b\.)([^\r\n]*)/;
+
 export function getTableRule(merge = false) {
   // ^(\|[^\n]+\|\r?\n)((?:\|:?[-]+:?)+\|)(\n(?:\|[^\n]+\|\r?\n?)*)?$
   // (\\|?[^\\n|]+\\|?\\n)(?:\\|?[\\s]*:?[-]{2,}:?[\\s]*
@@ -165,9 +175,15 @@ export function getCodeBlockRule() {
     begin: /(?:^|\n)(\n*((?:>[\t ]*)*)(?:[^\S\n]*))(`{3,})([^`]*?)\n/,
     content: /([\w\W]*?)/, // '([\\w\\W]*?)',
     end: /[^\S\n]*\3[ \t]*(?=$|\n+)/, // '\\s*```[ \\t]*(?=$|\\n+)',
+    reg: new RegExp(''),
   };
   codeBlock.reg = new RegExp(codeBlock.begin.source + codeBlock.content.source + codeBlock.end.source, 'g');
-  return codeBlock;
+  return {
+    ...codeBlock,
+    begin: codeBlock.begin.source,
+    content: codeBlock.content.source,
+    end: codeBlock.end.source,
+  };
 }
 
 /**
@@ -243,8 +259,14 @@ export function getDetailRule() {
   return ret;
 }
 
-// 匹配图片URL里的base64
-export const imgBase64Reg = /(!\[[^\n]*?\]\(data:image\/png;base64,)([^)]+)\)/g;
+// 匹配图片URL里的base64，[name](data:image/png;base64,xxx) 和 ![alt](data:image/png;base64,xxx) 这两种形式的都处理
+export const imgBase64Reg = /(\[[^\n]*?\]\(data:image\/[a-z]{1,10};base64,)([^)]+)\)/g;
+
+// 匹配base64数据
+export const base64Reg = /(data:image\/[a-z]{1,10};base64,)([0-9a-zA-Z+/]+)/g;
+
+// 匹配内容非常多的单行文本，为了避免表格的场景，所以特意避免表格的识别
+export const longTextReg = /([^\n]{100})([^\n|`\s]{5900,})/g;
 
 // 匹配图片{}里的data-xml属性
 export const imgDrawioXmlReg = /(!\[[^\n]*?\]\([^)]+\)\{[^}]* data-xml=)([^}]+)\}/g;
@@ -253,4 +275,21 @@ export const imgDrawioXmlReg = /(!\[[^\n]*?\]\([^)]+\)\{[^}]* data-xml=)([^}]+)\
  * 匹配draw.io的图片语法
  * 图片的语法为 ![alt](${base64}){data-type=drawio data-xml=${xml}}
  */
-export const imgDrawioReg = /(!\[[^\n]*?\]\(data:image\/png;base64,[^)]+\)\{data-type=drawio data-xml=[^}]+\})/g;
+export const imgDrawioReg =
+  /(!\[[^\n]*?\]\(data:image\/[a-z]{1,10};base64,[^)]+\)\{data-type=drawio data-xml=[^}]+\})/g;
+
+/**
+ * 从编辑器里的内容中获取没有代码块的内容
+ * @param {string} value
+ * @returns {string}
+ */
+export const getValueWithoutCode = (value = '') =>
+  value
+    .replace(getCodeBlockRule().reg, (whole) => {
+      // 把代码块里的内容干掉
+      return whole.replace(/^.*$/gm, '/n');
+    })
+    .replace(/(`+)(.+?(?:\n.+?)*?)\1/g, (whole) => {
+      // 把行内代码的符号去掉
+      return whole.replace(/[![\]()]/g, '.');
+    });

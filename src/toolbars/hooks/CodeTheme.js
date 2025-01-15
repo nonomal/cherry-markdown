@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 import MenuBase from '@/toolbars/MenuBase';
+import { changeCodeTheme } from '@/utils/config';
 /**
  * 设置代码块的主题
  * 本功能依赖[prism组件](https://github.com/PrismJS/prism)
@@ -25,24 +26,41 @@ export default class CodeTheme extends MenuBase {
     this.updateMarkdown = false;
     this.noIcon = true;
     this.subMenuConfig = [
-      { noIcon: true, name: 'default', onclick: this.bindSubClick.bind(this, 'default') },
+      { noIcon: false, name: 'autoWrap', iconName: 'br', onclick: this.bindSubClick.bind(this, 'wrap') },
+      { noIcon: true, name: 'light', onclick: this.bindSubClick.bind(this, 'default') },
       { noIcon: true, name: 'dark', onclick: this.bindSubClick.bind(this, 'dark') },
-      { noIcon: true, name: 'funky', onclick: this.bindSubClick.bind(this, 'funky') },
+      { noIcon: true, name: 'one light', onclick: this.bindSubClick.bind(this, 'one-light') },
+      { noIcon: true, name: 'one dark', onclick: this.bindSubClick.bind(this, 'one-dark') },
+      { noIcon: true, name: 'vs light', onclick: this.bindSubClick.bind(this, 'vs-light') },
+      { noIcon: true, name: 'vs dark', onclick: this.bindSubClick.bind(this, 'vs-dark') },
+      { noIcon: true, name: 'solarized light', onclick: this.bindSubClick.bind(this, 'solarized-light') },
+      { noIcon: true, name: 'tomorrow dark', onclick: this.bindSubClick.bind(this, 'tomorrow-night') },
       { noIcon: true, name: 'okaidia', onclick: this.bindSubClick.bind(this, 'okaidia') },
       { noIcon: true, name: 'twilight', onclick: this.bindSubClick.bind(this, 'twilight') },
       { noIcon: true, name: 'coy', onclick: this.bindSubClick.bind(this, 'coy') },
-      { noIcon: true, name: 'solarized light', onclick: this.bindSubClick.bind(this, 'solarized-light') },
-      { noIcon: true, name: 'tomorrow night', onclick: this.bindSubClick.bind(this, 'tomorrow-night') },
     ];
+  }
+
+  getActiveSubMenuIndex(subMenuDomPanel) {
+    const wrap = this.$cherry.getCodeWrap();
+    return wrap === 'wrap' ? 0 : -1;
   }
 
   /**
    * 响应点击事件
    * @param {string} shortKey 快捷键参数，本函数不处理这个参数
-   * @param {string} theme 具体的代码块主题
-   * @returns 回填到编辑器光标位置/选中文本区域的内容
+   * @param {string} codeTheme 具体的代码块主题
    */
-  onClick(shortKey = '', theme) {
-    document.querySelector('.cherry').setAttribute('data-code-block-theme', theme);
+  onClick(shortKey = '', codeTheme) {
+    if (codeTheme === 'wrap') {
+      // 切换是否自动换行
+      const wrap = this.$cherry.getCodeWrap();
+      const newWrap = wrap === 'wrap' ? 'nowrap' : 'wrap';
+      this.$cherry.wrapperDom.dataset.codeWrap = newWrap;
+      this.$cherry.setCodeWrap(newWrap);
+      return;
+    }
+    this.$cherry.$event.emit('changeCodeBlockTheme', codeTheme);
+    changeCodeTheme(this.$cherry, codeTheme);
   }
 }

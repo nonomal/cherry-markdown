@@ -26,6 +26,7 @@ const defaultOptions = {
   tocContainerClass: 'toc',
   tocTitleClass: 'toc-title',
   linkProcessor: defaultLinkProcessor,
+  showAutoNumber: false,
 };
 
 const emptyLinePlaceholder = '<p data-sign="empty-toc" data-lines="1">&nbsp;</p>';
@@ -43,6 +44,8 @@ export default class Toc extends ParagraphBase {
   isFirstTocToken = true;
   /** 允许渲染多个TOC */
   allowMultiToc = false;
+  /** 是否显示自增序号 */
+  showAutoNumber = false;
 
   constructor({ externals, config }) {
     super({ needCache: true });
@@ -54,6 +57,8 @@ export default class Toc extends ParagraphBase {
   beforeMakeHtml(str) {
     let $str = str;
     if (this.test($str, 'extend')) {
+      // TODO: fix this error
+      // @ts-expect-error
       $str = $str.replace(this.RULE.extend.reg, (match, lines, toc) => {
         if (!this.allowMultiToc && !this.isFirstTocToken) {
           // 需要补齐非捕获的\n，以及第一个分组中的\n
@@ -65,6 +70,8 @@ export default class Toc extends ParagraphBase {
       });
     }
     if (this.test($str, 'standard')) {
+      // TODO: fix this error
+      // @ts-expect-error
       $str = $str.replace(this.RULE.standard.reg, (match, lines, toc) => {
         if (!this.allowMultiToc && !this.isFirstTocToken) {
           // 需要补齐非捕获的\n，以及第一个分组中的\n
@@ -103,9 +110,10 @@ export default class Toc extends ParagraphBase {
       nodePrefix = this.$makeLevel(node.level);
     }
     const tocLink = this.linkProcessor(`#${node.id}`.replace(/safe_/g, '')); // transform header id to avoid being sanitized
-    return `<li class="${this.tocNodeClass}">${nodePrefix}<a href="${tocLink}" class="level-${node.level}">${
-      node.text
-    }</a>${closeTag ? '</li>' : ''}`;
+    return `<li class="${this.tocNodeClass}${this.showAutoNumber ? ` toc-li-${node.level}` : ''}">
+    ${nodePrefix}<a href="${tocLink}" class="level-${node.level}" target="_self">${node.text}</a>${
+      closeTag ? '</li>' : ''
+    }`;
   }
 
   $makePlainToc(tocNodeList) {
@@ -215,8 +223,9 @@ export default class Toc extends ParagraphBase {
 
   $makeToc(arr, dataSign, preLinesMatch) {
     const lines = calculateLinesOfParagraph(preLinesMatch, 1);
-    let ret = `<dir class="${this.tocContainerClass}" data-sign="${dataSign}-${lines}" data-lines="${lines}">`;
-    ret += `<p class="${this.tocTitleClass}">目录</p>`;
+    let ret = `<div class="${this.tocContainerClass}${this.showAutoNumber ? ' auto-num-toc' : ''}"
+      data-sign="${dataSign}-${lines}" data-lines="${lines}">`;
+    ret += `<p class="${this.tocTitleClass}">${this.$locale?.toc ?? '目录'}</p>`;
     if (arr.length <= 0) {
       return '';
     }
@@ -226,7 +235,7 @@ export default class Toc extends ParagraphBase {
     } else {
       ret += this.$makePlainToc(arr);
     }
-    ret += '</dir>';
+    ret += '</div>';
     return ret;
   }
 
@@ -234,23 +243,27 @@ export default class Toc extends ParagraphBase {
     let $str = super.afterMakeHtml(str);
     const headerList = [];
     const headerRegex = /<h([1-6])[^>]*? id="([^"]+?)"[^>]*?>(?:<a[^/]+?\/a>|)(.+?)<\/h\1>/g;
-    let str2Md5 = '';
+    let str2Hash = '';
     $str.replace(headerRegex, (match, level, id, text) => {
       const $text = text.replace(/~fn#[0-9]+#/g, '');
       headerList.push({ level: +level, id, text: $text });
-      str2Md5 += `${level}${id}`;
+      str2Hash += `${level}${id}`;
     });
-    str2Md5 = this.$engine.md5(str2Md5);
+    str2Hash = this.$engine.hash(str2Hash);
     $str = $str.replace(/(?:^|\n)(\[\[|\[|【【)(toc|TOC)(\]\]|\]|】】)([<~])/, (match) =>
       match.replace(/(\]\]|\]|】】)([<~])/, '$1\n$2'),
     );
     // 首先识别扩展语法
+    // TODO: fix this error
+    // @ts-expect-error
     $str = $str.replace(this.RULE.extend.reg, (match, preLinesMatch) =>
-      this.$makeToc(headerList, str2Md5, preLinesMatch),
+      this.$makeToc(headerList, str2Hash, preLinesMatch),
     );
     // 处理标准语法
+    // TODO: fix this error
+    // @ts-expect-error
     $str = $str.replace(this.RULE.standard.reg, (match, preLinesMatch) =>
-      this.$makeToc(headerList, str2Md5, preLinesMatch),
+      this.$makeToc(headerList, str2Hash, preLinesMatch),
     );
     // 重置toc状态
     this.isFirstTocToken = true;
@@ -261,6 +274,10 @@ export default class Toc extends ParagraphBase {
     return this.RULE[flavor].reg ? this.RULE[flavor].reg.test(str) : false;
   }
 
+  /**
+   * TODO: fix type errors, prefer use `rules` for multiple spec instead
+   * @returns
+   */
   rule() {
     const extend = {
       begin: '(?:^|\\n)(\\n*)',
@@ -270,6 +287,6 @@ export default class Toc extends ParagraphBase {
     extend.reg = new RegExp(extend.begin + extend.content + extend.end, 'g');
     const standard = { begin: '(?:^|\\n)(\\n*)', end: '(?=$|\\n)', content: '[ ]*(\\[(?:toc|TOC)\\])[ ]*' };
     standard.reg = new RegExp(standard.begin + standard.content + standard.end, 'g');
-    return { extend, standard };
+    return /** @type {any} */ ({ extend, standard });
   }
 }

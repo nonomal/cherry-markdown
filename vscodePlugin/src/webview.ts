@@ -10,9 +10,11 @@ import * as fs from 'fs';
  * @returns string
  */
 export function getWebviewContent(mdInfo: object, currentPanel: vscode.WebviewPanel, extensionPath: string) {
-  const baseResourcePath = getBaseResourcePath(currentPanel);
+  const baseResourcePath = getWebViewPath(currentPanel);
+  const activeTextEditorPath = getActiveTextEditorPath(currentPanel);
   const filePath = writeGlobalVarsToFile(extensionPath, {
     baseResourcePath,
+    activeTextEditorPath,
   });
   const pageResourceUrlsMap = {
     'global-vars.js': currentPanel.webview.asWebviewUri(vscode.Uri.file(filePath)),
@@ -57,32 +59,25 @@ content="default-src 'none'; img-src ${currentPanel.webview.cspSource} https: ht
   </html>`;
 }
 
-function getBaseResourcePath(currentPanel: vscode.WebviewPanel) {
+const getWebViewPath = (currentPanel: vscode.WebviewPanel): vscode.Uri => {
   const workspaceFolder = vscode.workspace.workspaceFolders![0].uri.fsPath ?? '';
-  const webviewResourcePath = currentPanel.webview.asWebviewUri(vscode.Uri.parse(workspaceFolder)).toString();
-  const basePath = path.join(webviewResourcePath, getRelativePath());
-  return basePath;
-}
+  const workspacePath = vscode.Uri.file(workspaceFolder);
+  return currentPanel.webview.asWebviewUri(workspacePath);
+};
 
-function writeGlobalVarsToFile(extensionPath: string, globalVars: { baseResourcePath: string }): string {
+const getActiveTextEditorPath = (currentPanel: vscode.WebviewPanel): vscode.Uri => {
+  const editor = vscode.window.activeTextEditor;
+  const activeTextEditorPath = editor ? currentPanel.webview.asWebviewUri(editor.document.uri) : getWebViewPath(currentPanel);;
+  return activeTextEditorPath;
+};
+
+function writeGlobalVarsToFile(extensionPath: string, globalVars: { baseResourcePath: vscode.Uri, activeTextEditorPath: vscode.Uri }): string {
   const globalVarsContent = `
     window._baseResourcePath = "${globalVars.baseResourcePath}";
-  `
+    window._activeTextEditorPath = "${globalVars.activeTextEditorPath}";
+  `;
+
   const filePath = path.join(extensionPath, 'web-resources/scripts', 'global-vars.js');
   fs.writeFileSync(filePath, globalVarsContent);
   return filePath;
-}
-
-function getRelativePath(): string {
-  if(!vscode.window.activeTextEditor) {
-    return '';
-  }
-  const documentUri = vscode.window.activeTextEditor.document.uri;
-  const workspaceFolderUri = vscode.workspace.getWorkspaceFolder(documentUri);
-  if(!workspaceFolderUri) {
-    return '';
-  }
-  const workspaceFolder = workspaceFolderUri.uri.fsPath;
-  const mdFileFolder = path.dirname(documentUri.fsPath);
-  return path.relative( workspaceFolder, mdFileFolder);
 }

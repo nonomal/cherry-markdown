@@ -67,6 +67,11 @@ $mdBlockquoteBg: $VIOLET1;
     background: $toolbarBg;
     .cherry-dropdown-item {
       color: $toolbarBtnColor;
+      // 选中子菜单高亮
+      &__selected {
+        background-color: $toolbarBtnBgHover;
+        color: $toolbarBtnHoverColor;
+      }
       &:hover {
         background-color: $toolbarBtnBgHover;
         color: $toolbarBtnHoverColor;
@@ -88,12 +93,19 @@ $mdBlockquoteBg: $VIOLET1;
         }
       }
     }
+    /** 选择表格的按钮 */
+    .cherry-insert-table-menu-item {
+      border-color: $toolbarBtnBgHover;
+    }
   }
 
   /** 选中文字时弹出的按钮 */
   .cherry-bubble {
     .cherry-bubble-bottom {
       border-top-color: $toolbarBg;
+    }
+    .cherry-bubble-top {
+      border-bottom-color: $toolbarBg;
     }
     /** 粘贴HTML内容时弹出的选择按钮 */
     &.cherry-switch-paste {
@@ -115,7 +127,7 @@ $mdBlockquoteBg: $VIOLET1;
         span, .cm-variable-2, .cm-string, .cm-strong, .cm-em, .cm-meta {
           color: $editorColor;
         }
-        .cm-image-marker, .cm-quote, .cm-header {
+        .cm-image-marker, .cm-quote, .cm-header, .cm-atom {
           color: $editorImportantColor;
         }
         .cm-url {
@@ -142,8 +154,8 @@ $mdBlockquoteBg: $VIOLET1;
     }
   }
 
-  .cherry-previewer-table-content-hander {
-    .cherry-previewer-table-content-hander__input {
+  .cherry-previewer-table-content-handler {
+    .cherry-previewer-table-content-handler__input {
       textarea {
         background-color: $editorBg;
         color: $editorColor;

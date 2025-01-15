@@ -38,7 +38,11 @@ export default class Detail extends ParagraphBase {
   makeHtml(str, sentenceMakeFunc) {
     return str.replace(this.RULE.reg, (match, preLines, isOpen, title, content) => {
       const lineCount = this.getLineCount(match, preLines);
-      const sign = this.$engine.md5(match);
+      const sign = this.$engine.hash(match);
+      const testHasCache = this.testHasCache(sign);
+      if (testHasCache !== false) {
+        return prependLineFeedForParagraph(match, testHasCache);
+      }
       const { type, html } = this.$getDetailInfo(isOpen, title, content, sentenceMakeFunc);
       const ret = this.pushCache(
         `<div class="cherry-detail cherry-detail__${type}" data-sign="${sign}" data-lines="${lineCount}" >${html}</div>`,
@@ -57,8 +61,8 @@ export default class Detail extends ParagraphBase {
     let html = '';
     if (type === 'multiple') {
       arr.forEach((item) => {
-        if (/\+\+/.test(item)) {
-          defaultOpen = /\+\+-/.test(item);
+        if (/^\s*\+\+/.test(item)) {
+          defaultOpen = /^\s*\+\+-/.test(item);
           currentTitle = item.replace(/\+\+[-]{0,1}\s*([^\n]+)$/, '$1');
           return true;
         }

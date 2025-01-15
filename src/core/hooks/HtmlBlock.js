@@ -23,10 +23,27 @@ import {
 import { sanitizer } from '@/Sanitizer';
 import { isBrowser } from '@/utils/env';
 
+/**
+ * encode unsafe link-related attributes
+ */
+const unsafeAttributes = ['href', 'src'];
+
+sanitizer.addHook('afterSanitizeAttributes', (node) => {
+  unsafeAttributes.forEach((attr) => {
+    if (!node.hasAttribute(attr)) {
+      return;
+    }
+    const value = node.getAttribute(attr);
+    // encode unsafe backslash in link attributes
+    node.setAttribute(attr, value.replace(/\\/g, '%5c'));
+  });
+});
+
 export default class HtmlBlock extends ParagraphBase {
   static HOOK_NAME = 'htmlBlock';
-  constructor() {
+  constructor({ config }) {
     super({ needCache: true });
+    this.filterStyle = config.filterStyle || false;
   }
 
   // ref: http://www.vfmd.org/vfmd-spec/specification/#procedure-for-detecting-automatic-links
@@ -64,7 +81,7 @@ export default class HtmlBlock extends ParagraphBase {
     let $str = str;
     $str = convertHTMLNumberToName($str);
     $str = escapeHTMLEntitiesWithoutSemicolon($str);
-    $str = $str.replace(/<[/]?(.*?)>/g, (whole, m1) => {
+    $str = $str.replace(/<[/]?([^<]*?)>/g, (whole, m1) => {
       // 匹配到非白名单且非AutoLink语法的尖括号会被转义
       // 如果是HTML注释，放行
       if (!whiteList.test(m1) && !this.isAutoLinkTag(whole) && !this.isHtmlComment(whole)) {
@@ -72,15 +89,39 @@ export default class HtmlBlock extends ParagraphBase {
           return whole.replace(/</g, '&#60;').replace(/>/g, '&#62;');
         }
       }
+      let wholeStr = whole;
+      // 识别<a>和<img>标签的href和src属性，并触发urlProcessor回调
+      m1.replace(/^a .*? href="([^"]+)"/, (all, href) => {
+        const processedURL = this.$engine.urlProcessor(href, 'link');
+        wholeStr = wholeStr.replace(/ href="[^"]+"/, ` href="${processedURL}"`);
+      });
+      m1.replace(/^a href="([^"]+)"/, (all, href) => {
+        const processedURL = this.$engine.urlProcessor(href, 'link');
+        wholeStr = wholeStr.replace(/ href="[^"]+"/, ` href="${processedURL}"`);
+      });
+      m1.replace(/^img .*? src="([^"]+)"/, (all, src) => {
+        const processedURL = this.$engine.urlProcessor(src, 'image');
+        wholeStr = wholeStr.replace(/ src="[^"]+"/, ` src="${processedURL}"`);
+      });
+      m1.replace(/^img src="([^"]+)"/, (all, src) => {
+        const processedURL = this.$engine.urlProcessor(src, 'image');
+        wholeStr = wholeStr.replace(/ src="[^"]+"/, ` src="${processedURL}"`);
+      });
+
       // 到达此分支的包含被尖括号包裹的AutoLink语法以及在白名单内的HTML标签
       // 没有被AutoLink解析并渲染的标签会被DOMPurify过滤掉，正常情况下不会出现遗漏
       // 临时替换完整的HTML标签首尾为$#60;和$#62;，供下一步剔除损坏的HTML标签
-      return whole.replace(/</g, '$#60;').replace(/>/g, '$#62;');
+      return wholeStr.replace(/</g, '$#60;').replace(/>/g, '$#62;');
     });
     // 替换所有形如「<abcd」和「</abcd」的左尖括号
     $str = $str.replace(/<(?=\/?(\w|\n|$))/g, '&#60;');
     // 还原被替换的尖括号
     $str = $str.replace(/\$#60;/g, '<').replace(/\$#62;/g, '>');
+    // 过滤HTML标签的style属性
+    if (this.filterStyle) {
+      $str = $str.replace(/<([^/][^>]+?) style="[^>\n]+?"([^>\n]*)>/gi, '<$1$2>');
+      $str = $str.replace(/<([^/][^>]+?) style='[^>\n]+?'([^>\n]*)>/gi, '<$1$2>');
+    }
     return $str;
   }
 

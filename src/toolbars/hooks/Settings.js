@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 import MenuBase from '@/toolbars/MenuBase';
-import Event from '@/Event';
 import { saveIsClassicBrToLocal, getIsClassicBrFromLocal, testKeyInLocal } from '@/utils/config';
+import ShortcutKeyConfigPanel from '@/toolbars/ShortcutKeyConfigPanel';
+import { CONTROL_KEY, getKeyCode, getStorageKeyMap } from '@/utils/shortcutKey';
 
 /**
  * 设置按钮
@@ -38,18 +39,26 @@ export default class Settings extends MenuBase {
     const previewIcon = defaultModel === 'editOnly' ? 'preview' : 'previewClose';
     const previewName = defaultModel === 'editOnly' ? 'togglePreview' : 'previewClose';
     this.instanceId = $cherry.instanceId;
+    /** @type {import('@/toolbars/MenuBase').SubMenuConfigItem[]} */
     this.subMenuConfig = [
       { iconName: classicBrIconName, name: classicBrName, onclick: this.bindSubClick.bind(this, 'classicBr') },
       { iconName: previewIcon, name: previewName, onclick: this.bindSubClick.bind(this, 'previewClose') },
       { iconName: '', name: 'hide', onclick: this.bindSubClick.bind(this, 'toggleToolbar') },
     ];
     this.attachEventListeners();
-    this.shortcutKeyMaps = [
-      {
-        shortKey: 'toggleToolbar',
-        shortcutKey: 'Ctrl-0',
+    this.shortcutKeyMap = {
+      [`${CONTROL_KEY}-${getKeyCode('0')}`]: {
+        hookName: this.name,
+        sub: 'toggleToolbar',
+        aliasName: this.$cherry.locale.hide,
       },
-    ];
+    };
+    // this.shortcutKeyMaps = [
+    //   {
+    //     shortKey: 'toggleToolbar',
+    //     shortcutKey: 'Ctrl-0',
+    //   },
+    // ];
   }
 
   /**
@@ -108,10 +117,10 @@ export default class Settings extends MenuBase {
    * 绑定预览事件
    */
   attachEventListeners() {
-    Event.on(this.instanceId, Event.Events.previewerClose, () => {
+    this.$cherry.$event.on('previewerClose', () => {
       this.togglePreviewBtn(false);
     });
-    Event.on(this.instanceId, Event.Events.previewerOpen, () => {
+    this.$cherry.$event.on('previewerOpen', () => {
       this.togglePreviewBtn(true);
     });
   }
@@ -146,6 +155,16 @@ export default class Settings extends MenuBase {
       this.engine.$cherry.previewer.update('');
       this.engine.$cherry.initText(this.engine.$cherry.editor.editor);
     } else if (shortKey === 'previewClose') {
+      // 需要浮动预览
+      if (this.editor.previewer.isPreviewerNeedFloat()) {
+        // 正在浮动预览
+        if (this.editor.previewer.isPreviewerFloat()) {
+          this.editor.previewer.recoverFloatPreviewer(true);
+        } else {
+          this.editor.previewer.floatPreviewer();
+        }
+        return;
+      }
       if (this.editor.previewer.isPreviewerHidden()) {
         this.editor.previewer.recoverPreviewer(true);
       } else {
@@ -153,6 +172,15 @@ export default class Settings extends MenuBase {
       }
     } else if (shortKey === 'toggleToolbar') {
       this.toggleToolbar();
+    } else if (shortKey === 'shortcutKey') {
+      if (!this.shortcutKeyConfigPanel) {
+        this.shortcutKeyConfigPanel = new ShortcutKeyConfigPanel(this.engine.$cherry);
+      }
+      const subMenuDropdownDom = this.engine?.$cherry?.toolbar?.subMenus?.[this.name];
+      if (subMenuDropdownDom instanceof HTMLElement) {
+        subMenuDropdownDom.style.display = 'none';
+      }
+      this.shortcutKeyConfigPanel.toggle(this.dom);
     }
     return selection;
   }
@@ -163,10 +191,15 @@ export default class Settings extends MenuBase {
    * @returns
    */
   matchShortcutKey(shortcutKey) {
-    const shortcutKeyMap = this.shortcutKeyMaps.find((item) => {
-      return item.shortcutKey === shortcutKey;
-    });
-    return shortcutKeyMap !== undefined ? shortcutKeyMap.shortKey : shortcutKey;
+    // 处理 bindSubClick 事件
+    const shortcutConfig = Object.values(this.shortcutKeyMap).find(({ sub }) => sub === shortcutKey);
+    if (typeof shortcutConfig === 'undefined') {
+      // 尝试找快捷键
+      const storageKeyMap = getStorageKeyMap(this.$cherry.nameSpace);
+      const storageShortcutConfig = storageKeyMap?.[shortcutKey];
+      return storageShortcutConfig ? String(storageShortcutConfig.sub) : shortcutKey;
+    }
+    return shortcutConfig.sub;
   }
 
   /**
@@ -175,20 +208,13 @@ export default class Settings extends MenuBase {
   toggleToolbar() {
     const { wrapperDom } = this.engine.$cherry;
     if (wrapperDom instanceof HTMLDivElement) {
-      const toolbarInstanceId = this.engine.$cherry.toolbar.instanceId;
       if (wrapperDom.className.indexOf('cherry--no-toolbar') > -1) {
         wrapperDom.classList.remove('cherry--no-toolbar');
-        Event.emit(toolbarInstanceId, Event.Events.toolbarShow);
+        this.$cherry.$event.emit('toolbarShow');
       } else {
         wrapperDom.classList.add('cherry--no-toolbar');
-        Event.emit(toolbarInstanceId, Event.Events.toolbarHide);
+        this.$cherry.$event.emit('toolbarHide');
       }
     }
-  }
-
-  get shortcutKeys() {
-    return this.shortcutKeyMaps.map((item) => {
-      return item.shortcutKey;
-    });
   }
 }

@@ -62,20 +62,27 @@ export function getIsClassicBrFromLocal() {
  * 保存当前主题
  * @param {string} theme
  */
-function saveThemeToLocal(theme) {
+function saveThemeToLocal(nameSpace, theme) {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('cherry-theme', theme);
+    localStorage.setItem(`${nameSpace}-theme`, theme);
   }
+}
+
+export function testHasLocal(nameSpace, key) {
+  if (typeof localStorage !== 'undefined') {
+    return !!localStorage.getItem(`${nameSpace}-${key}`);
+  }
+  return false;
 }
 
 /**
  * 获取当前主题
  * @returns {string} 主题名
  */
-export function getThemeFromLocal(fullClass = false) {
+export function getThemeFromLocal(fullClass = false, nameSpace = 'cherry') {
   let ret = 'default';
   if (typeof localStorage !== 'undefined') {
-    const localTheme = localStorage.getItem('cherry-theme');
+    const localTheme = localStorage.getItem(`${nameSpace}-theme`);
     if (localTheme) {
       ret = localTheme;
     }
@@ -89,10 +96,79 @@ export function getThemeFromLocal(fullClass = false) {
  * @param {string} theme 如果没有传theme，则从本地缓存里取
  */
 export function changeTheme($cherry, theme = '') {
-  const newTheme = (theme ? theme : getThemeFromLocal()).replace(/^.*theme__/, '');
+  const newTheme = (theme ? theme : getThemeFromLocal(false, $cherry.nameSpace)).replace(/^.*theme__/, '');
   const newClass = ` theme__${newTheme}`;
-  $cherry.wrapperDom.className = $cherry.wrapperDom.className.replace(/ theme__[^ $]+?( |$)/g, '') + newClass;
+  $cherry.wrapperDom.className = $cherry.wrapperDom.className.replace(/ theme__[^ $]+?( |$)/g, ' ') + newClass;
   $cherry.previewer.getDomContainer().className =
-    $cherry.previewer.getDomContainer().className.replace(/ theme__[^ $]+?( |$)/g, '') + newClass;
-  saveThemeToLocal(newTheme);
+    $cherry.previewer.getDomContainer().className.replace(/ theme__[^ $]+?( |$)/g, ' ') + newClass;
+  saveThemeToLocal($cherry.nameSpace, newTheme);
+}
+
+/**
+ * 保存当前代码主题
+ * @param {string} nameSpace
+ * @param {string} codeTheme
+ */
+function saveCodeThemeToLocal(nameSpace, codeTheme) {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(`${nameSpace}-codeTheme`, codeTheme);
+  }
+}
+
+/**
+ * 获取当前代码主题
+ * @param {string} nameSpace
+ * @returns {string} 主题名
+ */
+export function getCodeThemeFromLocal(nameSpace = 'cherry') {
+  let res = 'default';
+  if (typeof localStorage !== 'undefined') {
+    const localTheme = localStorage.getItem(`${nameSpace}-codeTheme`);
+    if (localTheme) {
+      res = localTheme;
+    }
+  }
+  return res;
+}
+
+/**
+ * 修改代码主题
+ * 相同nameSpace的实例有一样的代码主题配置
+ * @param {object} $cherry
+ * @param {string} codeTheme 如果没有传codeTheme，则从本地缓存里取
+ */
+export function changeCodeTheme($cherry, codeTheme) {
+  const newTheme = codeTheme ? codeTheme : getCodeThemeFromLocal($cherry.nameSpace);
+
+  $cherry.wrapperDom.setAttribute('data-code-block-theme', newTheme);
+
+  saveCodeThemeToLocal($cherry.nameSpace, newTheme);
+}
+
+/**
+ * 获取代码块是否换行的配置
+ * @param {string} nameSpace
+ * @param {boolean} defaultWrap
+ * @returns {string} 主题名
+ */
+export function getCodeWrapFromLocal(nameSpace = 'cherry', defaultWrap = true) {
+  let res = defaultWrap ? 'wrap' : 'nowrap';
+  if (typeof localStorage !== 'undefined') {
+    const localTheme = localStorage.getItem(`${nameSpace}-codeWrap`);
+    if (localTheme) {
+      res = localTheme;
+    }
+  }
+  return res;
+}
+
+/**
+ * 保存当前代码主题
+ * @param {string} nameSpace
+ * @param {string} wrap
+ */
+export function saveCodeWrapToLocal(nameSpace, wrap) {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(`${nameSpace}-codeWrap`, wrap);
+  }
 }

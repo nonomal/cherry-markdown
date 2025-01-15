@@ -6,7 +6,7 @@ import path from 'path-browserify';
  * 在侧边栏增加编辑/预览入口
  */
 // eslint-disable-next-line no-undef
-const customMenuChangeModule = Cherry.createMenuHook('编辑',  {
+const customMenuChangeModule = Cherry.createMenuHook('编辑', {
   iconName: 'pen',
   onClick(selection) {
     if (window.isDisableEdit) {
@@ -33,7 +33,7 @@ const customMenuChangeModule = Cherry.createMenuHook('编辑',  {
 });
 
 // eslint-disable-next-line no-undef
-const customMenuFont = Cherry.createMenuHook('字体样式',  {
+const customMenuFont = Cherry.createMenuHook('字体样式', {
   iconName: 'font',
 });
 
@@ -57,47 +57,26 @@ const customMenuFont = Cherry.createMenuHook('字体样式',  {
 // });
 
 
-// eslint-disable-next-line no-undef
-const customMenuChangeTheme = Cherry.createMenuHook('主题',  {
-  iconName: 'insertChart',
-  onClick: (selection, type) => {
-    changeTheme(type);
-    vscode.postMessage({
-      type: 'change-theme',
-      data: type,
-    });
-  },
-  subMenuConfig: [
-    { noIcon: true, name: '默认·default', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'default');
-    } },
-    { noIcon: true, name: '暗黑·dark', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'dark');
-    } },
-    { noIcon: true, name: '明亮·light', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'light');
-    } },
-    { noIcon: true, name: '清新·green', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'green');
-    } },
-    { noIcon: true, name: '热情·red', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'red');
-    } },
-    { noIcon: true, name: '淡雅·violet', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'violet');
-    } },
-    { noIcon: true, name: '清幽·blue', onclick: () => {
-      cherry.toolbar.menus.hooks.customMenuChangeTheme.fire(null, 'blue');
-    } },
-  ],
-});
+/** 处理 a 链接跳转问题 */
+const onClickLink = (e, target) => {
+  // 这里不能直接使用 target.href，因为本地相对文件地址会被vscode转成`webview://`协议
+  const href = target.attributes?.href.value;
 
-function changeTheme(theme) {
-  const cherryDom = cherry.wrapperDom;
-  const cherryPreviewDom = cherry.previewer.getDom();
-  cherryDom.className = `${cherryDom.className.replace(/ theme__[\S]+$/, '')} theme__${theme}`;
-  cherryPreviewDom.className = `${cherryPreviewDom.className.replace(/ theme__[\S]+$/, '')} theme__${theme}`;
-}
+  const hrefValidation = href ? href : 'href-invalid';
+  if (isHttpUrl(hrefValidation) || hrefValidation) {
+    // 阻止a链接在webview的默认跳转行为
+    e.preventDefault();
+    vscode.postMessage({
+      type: 'open-url',
+      data: href,
+    });
+    return;
+  }
+  vscode.postMessage({
+    type: 'open-url',
+    data: 'href-invalid',
+  });
+};
 
 const basicConfig = {
   id: 'markdown',
@@ -175,7 +154,7 @@ const basicConfig = {
       '|',
       {
         insert: [
-          // 'image',
+          'image',
           // 'audio',
           // 'video',
           'link',
@@ -205,14 +184,58 @@ const basicConfig = {
       'size',
       'color',
     ], // array or false
-    sidebar: ['customMenuChangeModule', 'mobilePreview', 'copy', 'customMenuChangeTheme'],
+    sidebar: [
+      'customMenuChangeModule',
+      'mobilePreview',
+      'copy',
+      'theme',
+    ],
     customMenu: {
       customMenuChangeModule,
       customMenuFont,
-      customMenuChangeTheme,
     },
+    toc: true,
   },
   editor: {
+    /**
+     * @typedef {Object} fileUploadParams
+     * @property {string=} name 文件名
+     * @property {string=} poster 封面
+     * @property {boolean=} isBorder 是否有边框
+     * @property {boolean} isShadow 是否有阴影
+     * @property {boolean} isRadius 是否圆角
+     */
+    /**
+     * @callback fileUploadCallback 回填回调函数
+     * @param {string} url 回填的url
+     * @param {fileUploadParams} params 回填的参数
+     */
+    /**
+     * 文件上传逻辑（涉及到文件上传均会调用此处）
+     * @param {File} file 具体文件
+     * @param {fileUploadCallback=} callback
+     */
+    fileUpload: (file, callback) => {
+      vscode.postMessage({
+        type: 'upload-file',
+        data: {
+          name: file.name,
+          path: file.path,
+          size: file.size,
+          type: file.type,
+        },
+      });
+      window.uploadFileCallback = callback;
+    },
+  },
+  event: {
+    // 当编辑区内容有实际变化时触发
+    changeMainTheme: (theme) => {
+      vscode.postMessage({
+        type: 'change-theme',
+        data: theme,
+      });
+    },
   },
   previewer: {
     // 自定义markdown预览区域class
@@ -227,15 +250,33 @@ const basicConfig = {
     // eslint-disable-next-line no-undef
     changeString2Pinyin: pinyin,
     beforeImageMounted(srcProp, srcValue) {
+      const { _activeTextEditorPath } = window;
+
+      //  http路径 或 data路径
       if (isHttpUrl(srcValue) || isDataUrl(srcValue)) {
         return {
           src: srcValue,
         };
       }
-      // eslint-disable-next-line no-underscore-dangle
-      const basePath = window._baseResourcePath || '';
+      // TODO: 绝对路径(如windows上D:\GithubDesktop\cherry-markdown\README.md)
+
+      // 相对路径
+      const absolutePath = new URL(srcValue, _activeTextEditorPath).href;
       return {
-        src: path.join(basePath, srcValue),
+        src: absolutePath,
+      };
+    },
+    onClickPreview: (e) => {
+      const { target } = e;
+      switch (target?.nodeName) {
+        case 'SPAN':
+          if (target?.parentElement?.nodeName === 'A') {
+            onClickLink(e, target?.parentElement);
+          }
+          break;
+        case 'A':
+          onClickLink(e, target);
+          break;
       };
     },
   },
@@ -249,16 +290,38 @@ function isHttpUrl(url) {
   return /https?:\/\//.test(url);
 }
 
+/**
+ * [vscode language](https://code.visualstudio.com/docs/getstarted/locales#_available-locales);
+ * [cherry language](https://github.com/Tencent/cherry-markdown/wiki/%E5%A4%9A%E8%AF%AD%E8%A8%80);
+ * */
+const languageIdentifiers = {
+  en: 'en_US', // English (US)
+  'zh-cn': 'zh_CN', // Simplified Chinese
+  // 'zh-tw': '繁体中文', // Traditional Chinese
+  // fr: '法语', // French
+  // de: '德语', // German
+  // it: '意大利语', // Italian
+  // es: '西班牙语', // Spanish
+  // ja: '日语', // Japanese
+  // ko: '韩国人', // Korean
+  ru: 'ru_RU', // Russian
+  // 'pt-br': '葡萄牙语（巴西）', // Portuguese (Brazil)
+  // tr: '土耳其', // Turkish
+  // pl: '波兰', // Polish
+  // cs: '捷克语', // Czech
+  // hu: '匈牙利', // Hungarian
+};
+
 const mdInfo = JSON.parse(document.getElementById('markdown-info').value);
-const config = Object.assign({}, basicConfig, { value: mdInfo.text });
-const { theme } = mdInfo;
+const locale = languageIdentifiers[mdInfo.vscodeLanguage] || 'zh_CN';
+
+const config = Object.assign({}, basicConfig, { value: mdInfo.text, locale });
 // eslint-disable-next-line new-cap, no-undef
 const cherry = new Cherry(config);
 // eslint-disable-next-line no-undef
 const vscode = acquireVsCodeApi();
 // 图片缓存
 // const imgCache = {};
-changeTheme(theme);
 
 // function afterInit() {
 //   setTimeout(() => {
@@ -292,7 +355,10 @@ cherry.previewer.getDom().addEventListener('scroll', () => {
     postScrollMessage(0);
     return true;
   }
-  if (domContainer.scrollTop + domContainer.offsetHeight > domContainer.scrollHeight) {
+  if (
+    domContainer.scrollTop + domContainer.offsetHeight
+    > domContainer.scrollHeight
+  ) {
     postScrollMessage(-1);
     return true;
   }
@@ -318,7 +384,11 @@ cherry.previewer.getDom().addEventListener('scroll', () => {
   // 获取观察点处最近的markdown元素
   let mdElement = targetElement.closest('[data-sign]');
   // 由于新增脚注，内部容器也有可能存在data-sign，所以需要循环往父级找
-  while (mdElement && mdElement.parentElement && mdElement.parentElement !== domContainer) {
+  while (
+    mdElement
+    && mdElement.parentElement
+    && mdElement.parentElement !== domContainer
+  ) {
     mdElement = mdElement.parentElement.closest('[data-sign]');
   }
   if (!mdElement) {
@@ -370,7 +440,6 @@ window.addEventListener('message', (e) => {
     case 'editor-change':
       window.disableEditListener = true;
       cherry.setValue(data.text);
-      changeTheme(data.theme);
       editTimeOut && clearTimeout(editTimeOut);
       editTimeOut = setTimeout(() => {
         window.disableEditListener = false;
@@ -398,6 +467,11 @@ window.addEventListener('message', (e) => {
     case 'enable-edit':
       window.isDisableEdit = false;
       break;
+    case 'upload-file-callback': {
+      const { url, ...rest } = data;
+      window.uploadFileCallback(url, rest);
+      break;
+    }
   }
 });
 
@@ -413,7 +487,9 @@ function elementsFromPoint(x, y) {
     return document.elementsFromPoint(x, y);
   }
 
-  if (typeof (/** @type {any}*/ (document).msElementsFromPoint) === 'function') {
+  if (
+    typeof (/** @type {any}*/ (document).msElementsFromPoint) === 'function'
+  ) {
     const nodeList = /** @type {any}*/ (document).msElementsFromPoint(x, y);
     return nodeList !== null ? Array.from(nodeList) : nodeList;
   }
@@ -422,7 +498,9 @@ function elementsFromPoint(x, y) {
   /** @type {HTMLElement} */
   let ele;
   do {
-    const currentElement = /** @type {HTMLElement} */ (document.elementFromPoint(x, y));
+    const currentElement = /** @type {HTMLElement} */ (
+      document.elementFromPoint(x, y)
+    );
     if (ele !== currentElement) {
       ele = currentElement;
       elements.push(ele);

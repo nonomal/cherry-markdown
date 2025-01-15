@@ -35,18 +35,37 @@ export default class Color extends MenuBase {
     return bgReg.test(selection);
   }
 
+  $testIsShortKey(shortKey) {
+    return /(color|background-color)\s*:/.test(shortKey);
+  }
+
+  $getTypeAndColor(shortKey) {
+    if (this.$testIsShortKey(shortKey)) {
+      const type = /background-color\s*:/.test(shortKey) ? 'background-color' : 'text';
+      const color = shortKey.replace(/(color|background-color)\s*:\s*([#0-9a-zA-Z]+)[^#0-9a-zA-Z]*$/, '$2').trim();
+      return { type, color };
+    }
+    return this.getAndCleanCacheOnce();
+  }
+
+  hideOtherSubMenu(hideAllSubMenu) {
+    const lastDisplay = this.bubbleColor.dom.style.display || 'none';
+    hideAllSubMenu();
+    this.bubbleColor.dom.style.display = lastDisplay;
+  }
+
   /**
    * 响应点击事件
    * @param {string} selection 被用户选中的文本内容
-   * @param {string} shortKey 快捷键参数，本函数不处理这个参数
+   * @param {string} shortKey 快捷键参数，color: #000000 | background-color: #000000
    * @param {Event & {target:HTMLElement}} event 点击事件，用来从被点击的调色盘中获得对应的颜色
    * @returns 回填到编辑器光标位置/选中文本区域的内容
    */
   onClick(selection, shortKey = '', event) {
-    let $selection = getSelection(this.editor.editor, selection) || this.locale.color;
-    if (this.hasCacheOnce()) {
+    if (this.hasCacheOnce() || this.$testIsShortKey(shortKey)) {
+      let $selection = getSelection(this.editor.editor, selection) || this.locale.color;
       // @ts-ignore
-      const { type, color } = this.getAndCleanCacheOnce();
+      const { type, color } = this.$getTypeAndColor(shortKey);
       const begin = type === 'text' ? `!!${color} ` : `!!!${color} `;
       const end = type === 'text' ? '!!' : '!!!';
       if (!this.isSelections && !this.$testIsColor(type, $selection)) {
@@ -98,7 +117,7 @@ export default class Color extends MenuBase {
     }
     this.updateMarkdown = false;
     // 【TODO】需要增加getMoreSelection的逻辑
-    this.bubbleColor.show({
+    this.bubbleColor.toggle({
       left,
       top,
       $color: this,
@@ -112,6 +131,7 @@ export default class Color extends MenuBase {
 class BubbleColor {
   constructor($cherry) {
     this.editor = $cherry.editor;
+    this.$cherry = $cherry;
     this.init();
     this.initAction();
   }
@@ -214,12 +234,12 @@ class BubbleColor {
     $colorWrap.classList.add('cherry-dropdown');
     const $textWrap = document.createElement('div');
     $textWrap.classList.add('cherry-color-text');
-    $textWrap.innerHTML = this.getFontColorDom('文本颜色');
+    $textWrap.innerHTML = this.getFontColorDom(this.$cherry.locale.fontColor);
     $colorWrap.appendChild($textWrap);
 
     const $bgWrap = document.createElement('div');
     $bgWrap.classList.add('cherry-color-bg');
-    $bgWrap.innerHTML = this.getFontColorDom('背景颜色');
+    $bgWrap.innerHTML = this.getFontColorDom(this.$cherry.locale.fontBgColor);
     $colorWrap.appendChild($bgWrap);
 
     return $colorWrap;
@@ -259,18 +279,17 @@ class BubbleColor {
       },
       false,
     );
-    this.dom.addEventListener('EditorHideToolbarSubMenu', () => {
-      if (this.dom.style.display !== 'none') {
-        this.dom.style.display = 'none';
-      }
-    });
   }
 
   /**
-   * 在对应的坐标展示调色盘
+   * 在对应的坐标展示/关闭调色盘
    * @param {Object} 坐标
    */
-  show({ left, top, $color }) {
+  toggle({ left, top, $color }) {
+    if (this.dom.style.display?.length > 0 && this.dom.style.display !== 'none') {
+      this.dom.style.display = 'none';
+      return;
+    }
     this.dom.style.left = `${left}px`;
     this.dom.style.top = `${top}px`;
     this.dom.style.display = 'block';

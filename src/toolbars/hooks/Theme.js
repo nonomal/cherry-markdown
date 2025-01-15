@@ -24,7 +24,9 @@ export default class Theme extends MenuBase {
     this.setName('theme', 'insertChart');
     this.subMenuConfig = [];
     const self = this;
-    $cherry.options.theme.forEach((one) => {
+
+    const themes = $cherry.options.theme || $cherry.options.themeSettings.themeList;
+    themes.forEach((one) => {
       self.subMenuConfig.push({
         iconName: one.className,
         name: one.label,
@@ -34,12 +36,25 @@ export default class Theme extends MenuBase {
   }
 
   /**
+   * 绑定子菜单点击事件
+   * @param {HTMLDivElement} subMenuDomPanel
+   * @returns {number} 当前激活的子菜单索引
+   */
+  getActiveSubMenuIndex(subMenuDomPanel) {
+    const theme = this.$cherry.wrapperDom.className.match(/theme__([^\s]+)/)?.[1] || '';
+    return Array.from(subMenuDomPanel.querySelectorAll('.cherry-dropdown-item')).findIndex((item) =>
+      item.querySelector(`.ch-icon-${theme}`),
+    );
+  }
+
+  /**
    * 响应点击事件
    * @param {string} selection 被用户选中的文本内容
    * @param {string} shortKey 快捷键参数
    * @returns {string} 回填到编辑器光标位置/选中文本区域的内容
    */
   onClick(selection, shortKey = '') {
+    this.$cherry.$event.emit('changeMainTheme', shortKey);
     changeTheme(this.$cherry, shortKey);
     this.updateMarkdown = false;
     return '';

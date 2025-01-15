@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import juice from 'juice';
+// import juice from 'juice';
 import MenuBase from '@/toolbars/MenuBase';
 import { copyToClip } from '@/utils/copy';
 /**
@@ -27,6 +27,7 @@ export default class Copy extends MenuBase {
     this.isLoading = false;
     this.updateMarkdown = false;
     this.setName('copy', 'copy');
+    this.lastIconOuterHtml = '';
   }
 
   async adaptWechat(rawHtml) {
@@ -51,7 +52,9 @@ export default class Copy extends MenuBase {
   }
 
   getStyleFromSheets(keyword) {
-    const sheets = Array.from(document.styleSheets).filter((item) => item.cssRules[0].cssText.indexOf(keyword) > -1);
+    const sheets = Array.from(document.styleSheets).filter(
+      (item) => item.cssRules[0] && item.cssRules[0].cssText.indexOf(keyword) > -1,
+    );
     return `<style>${sheets.reduce((html, sheet) => {
       return html + Array.from(sheet.cssRules).reduce((html, rule) => html + rule.cssText, '');
     }, '')}</style>`;
@@ -77,11 +80,11 @@ export default class Copy extends MenuBase {
   toggleLoading() {
     // 切换loading状态
     if (this.isLoading) {
-      const loadingButton = document.querySelector('.icon-loading');
-      loadingButton.outerHTML = `<i class="ch-icon ch-icon-copy" title="${this.locale.copy}"></i>`;
+      this.dom.lastElementChild.outerHTML = this.lastIconOuterHtml;
+      this.lastIconOuterHtml = '';
     } else {
-      const copyButton = document.querySelector('.ch-icon-copy');
-      copyButton.outerHTML = '<div class="icon-loading loading"></div>';
+      this.lastIconOuterHtml = this.dom.lastElementChild.outerHTML;
+      this.dom.lastElementChild.outerHTML = '<div class="icon-loading loading"></div>';
     }
     this.isLoading = !this.isLoading;
   }
@@ -102,11 +105,10 @@ export default class Copy extends MenuBase {
     // 将css样式以行内样式的形式插入到html内容里
     this.adaptWechat(html).then((html) => {
       copyToClip(
-        juice(
-          `<div data-inline-code-theme="${inlineCodeTheme}" data-code-block-theme="${codeBlockTheme}">
-            <div class="cherry-markdown">${html}</div>
-          </div>${mathStyle + echartStyle + cherryStyle}`,
-        ),
+        `${mathStyle + echartStyle + cherryStyle}
+        <div data-inline-code-theme="${inlineCodeTheme}" data-code-block-theme="${codeBlockTheme}">
+          <div class="cherry-markdown">${html}</div>
+        </div>`,
       );
       this.toggleLoading();
     });

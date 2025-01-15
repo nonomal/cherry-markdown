@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
-import imgSizeHander from '@/utils/imgSizeHander';
-import TableHandler from '@/utils/tableContentHander';
+import imgSizeHandler from '@/utils/imgSizeHandler';
+import TableHandler from '@/utils/tableContentHandler';
+import CodeHandler from '@/utils/codeBlockContentHandler';
 import { drawioDialog } from '@/utils/dialog';
-import Event from '@/Event';
-import { copyToClip } from '@/utils/copy';
-import { imgDrawioReg, getCodeBlockRule } from '@/utils/regexp';
-import { CODE_PREVIEWER_LANG_SELECT_CLASS_NAME } from '@/utils/code-preview-language-setting';
+import { imgDrawioReg, getValueWithoutCode } from '@/utils/regexp';
 import debounce from 'lodash/debounce';
+import FormulaHandler from '@/utils/formulaUtilsHandler';
+import ListHandler from '@/utils/listContentHandler';
+
 /**
  * 预览区域的响应式工具栏
  */
@@ -42,7 +43,7 @@ export default class PreviewerBubble {
      */
     this.editor = previewer.editor;
     this.previewerDom = this.previewer.getDom();
-    this.enablePreviewerBubble = this.previewer.options.enablePreviewerBubble;
+    this.$cherry = previewer.$cherry;
     /**
      * @property
      * @type {{ [key: string]: HTMLDivElement}}
@@ -57,9 +58,11 @@ export default class PreviewerBubble {
   }
 
   init() {
+    // 记录cherry外层容器的overflow属性，在后续的操作中会临时修改overflow属性，所以需要先记录
+    this.oldWrapperDomOverflow = this.previewer.$cherry.wrapperDom.style.overflow;
     this.previewerDom.addEventListener('click', this.$onClick.bind(this));
     this.previewerDom.addEventListener('mouseover', this.$onMouseOver.bind(this));
-    this.previewerDom.addEventListener('mouseout', this.$onMouseOut.bind(this));
+    // this.previewerDom.addEventListener('mouseout', this.$onMouseOut.bind(this));
 
     document.addEventListener('mousedown', (event) => {
       Object.values(this.bubbleHandler).forEach((handler) => handler.emit('mousedown', event));
@@ -82,7 +85,7 @@ export default class PreviewerBubble {
       },
       true,
     );
-    Event.on(this.previewer.instanceId, Event.Events.previewerClose, () => this.$removeAllPreviewerBubbles());
+    this.$cherry.$event.on('previewerClose', () => this.$removeAllPreviewerBubbles());
     this.previewer.options.afterUpdateCallBack.push(() => {
       Object.values(this.bubbleHandler).forEach((handler) =>
         handler.emit('previewUpdate', () => this.$removeAllPreviewerBubbles()),
@@ -90,6 +93,29 @@ export default class PreviewerBubble {
     });
     this.previewerDom.addEventListener('change', this.$onChange.bind(this));
     this.removeHoverBubble = debounce(() => this.$removeAllPreviewerBubbles('hover'), 400);
+  }
+
+  /**
+   * 判断是否为代码块
+   * @param {HTMLElement} element
+   * @returns {boolean|HTMLElement}
+   */
+  isCherryCodeBlock(element) {
+    // 引用里的代码块先不支持所见即所得编辑
+    if (this.$getClosestNode(element, 'BLOCKQUOTE') !== false) {
+      return false;
+    }
+    if (element.nodeName === 'DIV' && element.dataset.type === 'codeBlock') {
+      return element;
+    }
+    const container = this.$getClosestNode(element, 'DIV');
+    if (container === false) {
+      return false;
+    }
+    if (container.dataset.type === 'codeBlock') {
+      return container;
+    }
+    return false;
   }
 
   /**
@@ -105,37 +131,68 @@ export default class PreviewerBubble {
     if (/simple-table/.test(container.className) || !/cherry-table-container/.test(container.className)) {
       return false;
     }
+    // 引用里的表格先不支持所见即所得编辑
+    if (this.$getClosestNode(element, 'BLOCKQUOTE') !== false) {
+      return false;
+    }
+    return container;
+  }
+
+  /**
+   * 是否开启了预览区操作 && 是否有编辑区
+   * @returns {boolean}
+   */
+  $isEnableBubbleAndEditorShow() {
+    if (!this.previewer.options.enablePreviewerBubble) {
+      return false;
+    }
+    const cherryStatus = this.previewer.$cherry.getStatus();
+    if (cherryStatus.editor === 'hide') {
+      return false;
+    }
     return true;
   }
 
   $onMouseOver(e) {
-    if (!this.enablePreviewerBubble) {
-      return;
-    }
-    const cherryStatus = this.previewer.$cherry.getStatus();
-    // 左侧编辑器被隐藏时不再提供后续功能
-    if (cherryStatus.editor === 'hide') {
-      return;
-    }
+    /** @type {Event} */
     const { target } = e;
-    if (typeof target.tagName === 'undefined') {
+    // 这里要用Element，而不是HTMLElement
+    if (!(target instanceof Element) || typeof target.tagName === 'undefined') {
       return;
     }
     switch (target.tagName) {
       case 'TD':
       case 'TH':
-        if (!this.isCherryTable(e.target)) {
+        if (!this.$isEnableBubbleAndEditorShow()) {
+          return;
+        }
+        // eslint-disable-next-line no-case-declarations
+        const table = this.isCherryTable(e.target);
+        if (false === table) {
           return;
         }
         this.removeHoverBubble.cancel();
         this.$removeAllPreviewerBubbles('hover');
-        this.$showTablePreviewerBubbles('hover', e.target);
+        // @ts-ignore
+        this.$showTablePreviewerBubbles('hover', e.target, table);
+        return;
+      case 'PRE':
+      case 'CODE':
+      case 'SPAN':
+      case 'DIV':
+        // eslint-disable-next-line no-case-declarations
+        const codeBlock = this.isCherryCodeBlock(e.target);
+        if (codeBlock === false) {
+          return;
+        }
+        this.showCodeBlockPreviewerBubbles('hover', codeBlock);
         return;
     }
+    this.removeHoverBubble();
   }
 
   $onMouseOut() {
-    if (!this.enablePreviewerBubble) {
+    if (!this.previewer.options.enablePreviewerBubble) {
       return;
     }
     const cherryStatus = this.previewer.$cherry.getStatus();
@@ -143,7 +200,7 @@ export default class PreviewerBubble {
     if (cherryStatus.editor === 'hide') {
       return;
     }
-    this.removeHoverBubble();
+    // this.removeHoverBubble();
   }
 
   $dealCheckboxClick(e) {
@@ -153,7 +210,7 @@ export default class PreviewerBubble {
     this.checkboxIdx = list.indexOf(target);
 
     // 然后找到Editor中对应的`- []`或者`- [ ]`进行修改
-    const contents = this.getValueWithoutCode().split('\n');
+    const contents = getValueWithoutCode(this.editor.editor.getValue()).split('\n');
 
     let editorCheckboxCount = 0;
     // [ ]中的空格，或者[x]中的x的位置
@@ -178,34 +235,55 @@ export default class PreviewerBubble {
     this.editor.editor.replaceSelection(this.editor.editor.getSelection() === ' ' ? 'x' : ' ', 'around');
   }
 
+  /**
+   * 点击预览区域的事件处理
+   * @param {MouseEvent} e
+   * @returns
+   */
   $onClick(e) {
     const { target } = e;
-    // 复制代码块操作不关心编辑器的状态
-    this.$dealCopyCodeBlock(e);
-    const cherryStatus = this.previewer.$cherry.getStatus();
-    // 纯预览模式下，支持点击放大图片功能（以回调的形式实现，需要业务侧实现图片放大功能）
-    if (cherryStatus.editor === 'hide') {
-      if (cherryStatus.previewer === 'show') {
-        this.previewer.$cherry.options.callback.onClickPreview &&
-          this.previewer.$cherry.options.callback.onClickPreview(e);
-      }
+    if (!(target instanceof Element)) {
       return;
     }
 
-    // 编辑draw.io不受enablePreviewerBubble配置的影响
-    if (target.tagName === 'IMG' && target.getAttribute('data-type') === 'drawio') {
-      if (!this.beginChangeDrawioImg(target)) {
+    // 编辑draw.io不受previewer.options.enablePreviewerBubble配置的影响
+    if (target instanceof HTMLImageElement) {
+      if (
+        target.tagName === 'IMG' &&
+        target.getAttribute('data-type') === 'drawio' &&
+        this.$cherry.status.editor === 'show'
+      ) {
+        if (!this.beginChangeDrawioImg(target)) {
+          return;
+        }
+        const xmlData = decodeURI(target.getAttribute('data-xml'));
+        drawioDialog(
+          this.previewer.$cherry.options.drawioIframeUrl,
+          this.previewer.$cherry.options.drawioIframeStyle,
+          xmlData,
+          (newData) => {
+            const { xmlData, base64 } = newData;
+            this.editor.editor.replaceSelection(
+              `(${base64}){data-type=drawio data-xml=${encodeURI(xmlData)}}`,
+              'around',
+            );
+          },
+        );
         return;
       }
-      const xmlData = decodeURI(target.getAttribute('data-xml'));
-      drawioDialog(this.previewer.$cherry.options.drawioIframeUrl, xmlData, (newData) => {
-        const { xmlData, base64 } = newData;
-        this.editor.editor.replaceSelection(`(${base64}){data-type=drawio data-xml=${encodeURI(xmlData)}}`, 'around');
-      });
-      return;
     }
 
-    if (!this.enablePreviewerBubble) {
+    // 点击展开代码块操作
+    if (target.className === 'expand-btn ' || target.className === 'ch-icon ch-icon-expand') {
+      const expandBtnDom = this.$getClosestNode(target, 'DIV');
+      expandBtnDom.parentNode.parentNode.classList.remove('cherry-code-unExpand');
+      expandBtnDom.parentNode.parentNode.classList.add('cherry-code-expand');
+      if (this.bubbleHandler?.hover?.unExpandDom) {
+        this.bubbleHandler.hover.unExpandDom.classList.remove('hidden');
+      }
+    }
+
+    if (!this.previewer.options.enablePreviewerBubble) {
       return;
     }
     // 只有双栏编辑模式才出现下面的功能
@@ -213,33 +291,65 @@ export default class PreviewerBubble {
     if (target.className === 'ch-icon ch-icon-square' || target.className === 'ch-icon ch-icon-check') {
       this.$dealCheckboxClick(e);
     }
-    this.$removeAllPreviewerBubbles();
+    this.$removeAllPreviewerBubbles('click');
     if (typeof target.tagName === 'undefined') {
       return;
     }
+
     switch (target.tagName) {
       case 'IMG':
-        this.$showImgPreviewerBubbles(target);
+        if (target instanceof HTMLImageElement) {
+          this.$showImgPreviewerBubbles(target);
+        }
         break;
       case 'TD':
       case 'TH':
-        if (!this.isCherryTable(e.target)) {
-          return;
+        if (target instanceof HTMLElement) {
+          const table = this.isCherryTable(target);
+          if (false === table) {
+            return;
+          }
+          // @ts-ignore
+          this.$showTablePreviewerBubbles('click', target, table);
         }
-        this.$showTablePreviewerBubbles('click', e.target);
+        break;
+      case 'svg':
+        if (target?.parentElement?.tagName === 'MJX-CONTAINER') {
+          this.$showFormulaPreviewerBubbles('click', target, { x: e.pageX, y: e.pageY });
+        }
+        break;
+      case 'A':
+        e.stopPropagation(); // 阻止冒泡，避免触发预览区域的点击事件
+        break;
+      case 'P':
+        if (
+          target instanceof HTMLParagraphElement &&
+          target.parentElement instanceof HTMLLIElement &&
+          // 引用里的列表先不支持所见即所得编辑
+          this.$getClosestNode(target, 'BLOCKQUOTE') === false
+        ) {
+          if (target.children.length !== 0) {
+            // 富文本
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          // 鼠标点击在列表的某项上时，为target增加contenteditable属性，使其可编辑
+          target.setAttribute('contenteditable', 'true');
+          target.focus();
+          this.$showListPreviewerBubbles('click', target);
+        }
         break;
     }
   }
 
   $onChange(e) {
-    const { target } = e;
-    // code预览区域，修改语言设置项事件处理
-    if (target.className === CODE_PREVIEWER_LANG_SELECT_CLASS_NAME) {
-      this.$codePreviewLangSelectEventHandler(e);
-    }
+    return;
   }
 
   $getClosestNode(node, targetNodeName) {
+    if (!node || !node.tagName) {
+      return false;
+    }
     if (node.tagName === targetNodeName) {
       return node;
     }
@@ -247,30 +357,6 @@ export default class PreviewerBubble {
       return false;
     }
     return this.$getClosestNode(node.parentNode, targetNodeName);
-  }
-
-  /**
-   * 处理复制代码块的操作
-   */
-  $dealCopyCodeBlock(e) {
-    const { target } = e;
-    if (target.className === 'cherry-copy-code-block' || target.parentNode?.className === 'cherry-copy-code-block') {
-      const parentNode =
-        target.className === 'cherry-copy-code-block' ? target.parentNode : target.parentNode.parentNode;
-      const codeContent = parentNode.innerText;
-      const final = this.previewer.$cherry.options.callback.onCopyCode(e, codeContent);
-      if (final === false) {
-        return false;
-      }
-      const iconNode = parentNode.querySelector('i.ch-icon-copy');
-      if (iconNode) {
-        iconNode.className = iconNode.className.replace('copy', 'ok');
-        setTimeout(() => {
-          iconNode.className = iconNode.className.replace('ok', 'copy');
-        }, 1500);
-      }
-      copyToClip(final);
-    }
   }
 
   /**
@@ -290,6 +376,9 @@ export default class PreviewerBubble {
         value.emit('remove');
         delete this.bubbleHandler[key];
       });
+    if (Object.keys(this.bubbleHandler).length <= 0) {
+      this.previewer.$cherry.wrapperDom.style.overflow = this.oldWrapperDomOverflow || '';
+    }
   }
 
   /**
@@ -297,10 +386,47 @@ export default class PreviewerBubble {
    * @param {string} trigger 触发方式
    * @param {HTMLElement} htmlElement 用户触发的table dom
    */
-  $showTablePreviewerBubbles(trigger, htmlElement) {
-    this.$createPreviewerBubbles(trigger, trigger === 'click' ? 'table-content-hander' : 'table-hover-handler');
-    const handler = new TableHandler(trigger, htmlElement, this.bubble[trigger], this.previewerDom, this.editor.editor);
+  $showTablePreviewerBubbles(trigger, htmlElement, tableElement) {
+    if (this.bubbleHandler[trigger]) {
+      if (this.bubbleHandler[trigger].tableElement === tableElement) {
+        // 已经存在相同的target，直接返回
+        this.bubbleHandler[trigger].showBubble();
+        return;
+      }
+    }
+    this.$createPreviewerBubbles(trigger, trigger === 'click' ? 'table-content-handler' : 'table-hover-handler');
+    const handler = new TableHandler(
+      trigger,
+      htmlElement,
+      this.bubble[trigger],
+      this.previewerDom,
+      this.editor.editor,
+      tableElement,
+      this.previewer.$cherry,
+    );
     handler.showBubble();
+    this.bubbleHandler[trigger] = handler;
+  }
+
+  showCodeBlockPreviewerBubbles(trigger, htmlElement) {
+    if (this.bubbleHandler[trigger]) {
+      if (this.bubbleHandler[trigger].target === htmlElement) {
+        // 已经存在相同的target，直接返回
+        this.removeHoverBubble.cancel();
+        return;
+      }
+    }
+    this.$removeAllPreviewerBubbles('hover');
+    this.$createPreviewerBubbles(trigger, `codeBlock-${trigger}-handler`);
+    const handler = new CodeHandler(
+      trigger,
+      htmlElement,
+      this.bubble[trigger],
+      this.previewerDom,
+      this.editor.editor,
+      this,
+    );
+    handler.showBubble(this.$isEnableBubbleAndEditorShow());
     this.bubbleHandler[trigger] = handler;
   }
 
@@ -316,22 +442,33 @@ export default class PreviewerBubble {
     if (!this.beginChangeImgValue(htmlElement)) {
       return { emit: () => {} };
     }
-    imgSizeHander.showBubble(htmlElement, this.bubble.click, this.previewerDom);
-    imgSizeHander.bindChange(this.changeImgValue.bind(this));
-    this.bubbleHandler.click = imgSizeHander;
+    imgSizeHandler.showBubble(htmlElement, this.bubble.click, this.previewerDom);
+    imgSizeHandler.bindChange(this.changeImgValue.bind(this));
+    this.bubbleHandler.click = imgSizeHandler;
   }
 
-  getValueWithoutCode() {
-    return this.editor.editor
-      .getValue()
-      .replace(getCodeBlockRule().reg, (whole) => {
-        // 把代码块里的内容干掉
-        return whole.replace(/^.*$/gm, '/n');
-      })
-      .replace(/(`+)(.+?(?:\n.+?)*?)\1/g, (whole) => {
-        // 把行内代码的符号去掉
-        return whole.replace(/[![\]()]/g, '.');
-      });
+  /**
+   * 为触发的公式增加操作工具栏
+   * @param {string} trigger 触发方式
+   * @param {Element} target 用户触发的公式dom
+   * @param {{x?: number, y?: number}} options 额外参数
+   */
+  $showFormulaPreviewerBubbles(trigger, target, options = {}) {
+    this.$createPreviewerBubbles(trigger, 'formula-hover-handler');
+    const formulaHandler = new FormulaHandler(trigger, target, this.bubble[trigger], this.previewerDom, this.editor);
+    formulaHandler.showBubble(options?.x || 0, options?.y || 0);
+    this.bubbleHandler[trigger] = formulaHandler;
+  }
+
+  /**
+   * 为触发的列表增加操作工具栏
+   * @param {string} trigger 触发方式
+   * @param {HTMLParagraphElement} target 用户触发的列表dom
+   */
+  $showListPreviewerBubbles(trigger, target, options = {}) {
+    this.$createPreviewerBubbles(trigger, 'list-hover-handler');
+    const listHandler = new ListHandler(trigger, target, this.bubble[trigger], this.previewerDom, this.editor);
+    this.bubbleHandler[trigger] = listHandler;
   }
 
   /**
@@ -343,7 +480,7 @@ export default class PreviewerBubble {
     const allDrawioImgs = Array.from(this.previewerDom.querySelectorAll('img[data-type="drawio"]'));
     const totalDrawioImgs = allDrawioImgs.length;
     const drawioImgIndex = allDrawioImgs.indexOf(htmlElement);
-    const content = this.getValueWithoutCode();
+    const content = getValueWithoutCode(this.editor.editor.getValue());
     const drawioImgsCode = content.match(imgDrawioReg);
     const testSrc = drawioImgsCode[drawioImgIndex]
       ? drawioImgsCode[drawioImgIndex].replace(/^!\[.*?\]\((.*?)\)/, '$1').trim()
@@ -364,7 +501,7 @@ export default class PreviewerBubble {
             beginCh += targetString.replace(/^(!\[[^\]]*])[^\n]*$/, '$1').length;
             this.editor.editor.setSelection({ line, ch: beginCh }, { line, ch: endCh });
             // 更新后需要再调用一次markText机制
-            this.editor.dealBigData();
+            this.editor.dealSpecialWords();
             return true;
           }
           testIndex += 1;
@@ -389,7 +526,7 @@ export default class PreviewerBubble {
    * @returns {boolean}
    */
   beginChangeImgValue(htmlElement) {
-    const content = this.getValueWithoutCode();
+    const content = getValueWithoutCode(this.editor.editor.getValue());
     const src = htmlElement.getAttribute('src');
     const imgReg = /(!\[[^\n]*?\]\([^)]+\))/g;
     const contentImgs = content.match(imgReg);
@@ -450,7 +587,7 @@ export default class PreviewerBubble {
    * @param {string} trigger 触发方式
    * @param {string} type 容器类型（用作样式名：cherry-previewer-{type}）
    */
-  $createPreviewerBubbles(trigger = 'click', type = 'img-size-hander') {
+  $createPreviewerBubbles(trigger = 'click', type = 'img-size-handler') {
     if (!this.bubble[trigger]) {
       this.bubble[trigger] = document.createElement('div');
       this.bubble[trigger].className = `cherry-previewer-${type}`;
@@ -460,61 +597,12 @@ export default class PreviewerBubble {
         this.bubble[trigger].addEventListener('mouseover', this.removeHoverBubble.cancel);
         this.bubble[trigger].addEventListener('mouseout', this.removeHoverBubble);
       }
+      // 暂时让最上层容器的overflow变成hidden
+      this.previewer.$cherry.wrapperDom.style.overflow = 'hidden';
     }
   }
 
   $showBorderBubbles() {}
 
   $showBtnBubbles() {}
-
-  /**
-   * 修改预览区域代码语言设置的回调
-   */
-  $codePreviewLangSelectEventHandler(event) {
-    const list = Array.from(this.previewerDom.querySelectorAll(`.${CODE_PREVIEWER_LANG_SELECT_CLASS_NAME}`));
-    const codePreviewIndex = list.indexOf(event.target);
-    const contentList = this.editor.editor.getValue().split('\n');
-    let targetCodePreviewSelectLine = -1;
-    let findCodeArea = -1;
-    // 相互匹配的`的数量
-    let matchedSignalNum = 0;
-    // 查找选择设置的代码块在哪一行:
-    let left = 0;
-    while (left < contentList.length) {
-      if (findCodeArea >= codePreviewIndex) {
-        break;
-      }
-      let right = left + 1;
-      if (/^`{3,}[\s\S]*$/.test(contentList[left])) {
-        // 起始的`的数量
-        const topSignalNum = contentList[left].match(/^(`*)/g)?.[0].length ?? 0;
-        while (right < contentList.length) {
-          let isMatched = false;
-          const bottomSignalNum = contentList[right].match(/^(`*)/g)?.[0].length ?? 0;
-          // 支持: 3个及以上的`的相互匹配
-          if (/^`{3,}$/.test(contentList[right]) && bottomSignalNum === topSignalNum) {
-            isMatched = true;
-            findCodeArea = findCodeArea + 1;
-            if (findCodeArea === codePreviewIndex) {
-              targetCodePreviewSelectLine = left;
-              matchedSignalNum = topSignalNum;
-            }
-          }
-          right = right + 1;
-          if (isMatched) {
-            break;
-          }
-        }
-      }
-      left = right;
-    }
-    // 只有匹配了代码块才进行替换
-    if (matchedSignalNum) {
-      this.editor.editor.setSelection(
-        { line: targetCodePreviewSelectLine, ch: matchedSignalNum },
-        { line: targetCodePreviewSelectLine, ch: contentList[targetCodePreviewSelectLine].length },
-      );
-      this.editor.editor.replaceSelection(event.target.value || '');
-    }
-  }
 }
